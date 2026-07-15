@@ -1,0 +1,18 @@
+[project]
+name = "seer"
+version = "0.1.0"
+description = "SEER — Self-Evaluating Energy Reasoner: a latent-predictive model with a native energy self-certainty channel and energy-descent self-correction"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.4",
+    "transformers>=4.46",
+    "numpy>=2.0",
+    "scikit-learn>=1.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/seer"]
