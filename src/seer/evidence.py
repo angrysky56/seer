@@ -122,7 +122,10 @@ class FailureRecord:
 
 
 EvidenceRecord = TaskExample | GenerationRecord | ScoredResult | FailureRecord
-_RECORD_TYPES = {item.record_type: item for item in (TaskExample, GenerationRecord, ScoredResult, FailureRecord)}
+_RECORD_TYPES = {
+    item.record_type: item
+    for item in (TaskExample, GenerationRecord, ScoredResult, FailureRecord)
+}
 
 
 def _canonical_identity(kind: str, identity: dict[str, Any]) -> str:
