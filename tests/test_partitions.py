@@ -2,6 +2,13 @@ from dataclasses import replace
 
 import pytest
 
+from seer.corruptions import (
+    CorruptionError,
+    decode_corruptions,
+    encode_corruptions,
+    make_corruption,
+    natural_examples,
+)
 from seer.evidence import TaskExample
 from seer.partitions import (
     GoldScorer,
@@ -61,3 +68,25 @@ def test_protected_generation_view_has_no_gold_and_scorer_is_scoped():
     view = next(protected_generation_view([item]))
     assert not hasattr(view, "gold_normalized") and not hasattr(view, "gold_raw")
     assert GoldScorer([item]).gold_for(item.example_id) == "1"
+
+
+def test_corruption_round_trip_is_deterministic_and_provenance_complete():
+    item = replace(assign_partitions([example("1", prompt="a\nb\nc")])[0],
+                   partition="signal_train")
+    first = make_corruption(item, strategy="context-line-shuffle", seed=19)
+    second = make_corruption(item, strategy="context-line-shuffle", seed=19)
+    assert first == second and first.before_hash != first.after_hash
+    assert decode_corruptions(encode_corruptions([first])) == (first,)
+    assert first.intended_use == "signal_training" and first.validation_status == "validated"
+
+
+def test_corruption_is_rejected_from_natural_evidence_and_confirmatory_targets():
+    item = assign_partitions([example("1")])[0]
+    corruption = make_corruption(replace(item, partition="signal_train"),
+                                 strategy="answer-replacement", seed=7, intended_use="ablation")
+    with pytest.raises(CorruptionError, match="natural iterator"):
+        tuple(natural_examples([corruption]))
+    assert tuple(natural_examples([corruption], include_corruptions=True)) == (corruption,)
+    with pytest.raises(CorruptionError, match="confirmatory"):
+        make_corruption(replace(item, partition="confirmatory_test"),
+                        strategy="answer-replacement", seed=7)
