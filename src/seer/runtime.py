@@ -7,18 +7,22 @@ import importlib.metadata
 import json
 import os
 import platform
+import random
+import socket
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 
-from seer.config import ExperimentConfig, config_digest
+from seer.config import ExperimentConfig, config_digest, config_to_dict
 
 MANIFEST_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_VERSION = 1
@@ -222,3 +226,223 @@ def finalize_run(
     validate_artifacts(root, artifacts)
     atomic_write_bytes(root / "COMPLETE", f"{digest}\n".encode())
     return manifest
+
+
+class RunStatus(StrEnum):
+    CREATED = "created"
+    RUNNING = "running"
+    INTERRUPTED = "interrupted"
+    FAILED = "failed"
+    COMPLETE = "complete"
+
+
+@dataclass(slots=True)
+class RunState:
+    schema_version: int
+    config_digest: str
+    status: RunStatus
+    stages: dict[str, str] = field(default_factory=dict)
+    events: list[dict[str, Any]] = field(default_factory=list)
+
+
+class RunLock:
+    """An atomic exclusive lock that can only be recovered by explicit request."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        self.path = Path(path)
+        self.event_sink = event_sink
+        self.acquired = False
+
+    def acquire(self, *, recover_stale: bool = False) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "pid": os.getpid(),
+            "hostname": socket.gethostname(),
+            "started_at": _utc_now(),
+        }
+        try:
+            descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError as error:
+            if not recover_stale:
+                raise RuntimeError(
+                    f"run is already locked at {self.path}; pass recover_stale=True "
+                    "only after confirming its writer is gone"
+                ) from error
+            recovered = self.path.with_name(
+                f"{self.path.name}.recovered.{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+            )
+            os.replace(self.path, recovered)
+            event = {
+                "type": "lock_recovered",
+                "timestamp": _utc_now(),
+                "previous_lock": recovered.name,
+            }
+            if self.event_sink is not None:
+                self.event_sink(event)
+            descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        self.acquired = True
+
+    def release(self) -> None:
+        if self.acquired:
+            self.path.unlink(missing_ok=True)
+            self.acquired = False
+
+    def __enter__(self) -> RunLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, *_error: object) -> None:
+        self.release()
+
+
+@dataclass(slots=True)
+class CheckpointState:
+    config_digest: str
+    global_step: int
+    next_epoch: int
+    next_batch: int
+    model_state: dict[str, Any]
+    optimizer_state: dict[str, Any]
+    rng_state: dict[str, Any]
+    sampler_state: dict[str, Any]
+    schema_version: int = CHECKPOINT_SCHEMA_VERSION
+
+
+def capture_rng_state(
+    *, generators: Mapping[str, torch.Generator] | None = None
+) -> dict[str, Any]:
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch_cpu": torch.get_rng_state(),
+        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+        "generators": {
+            name: generator.get_state() for name, generator in (generators or {}).items()
+        },
+    }
+
+
+def restore_rng_state(
+    state: Mapping[str, Any],
+    *,
+    generators: Mapping[str, torch.Generator] | None = None,
+) -> None:
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch_cpu"])
+    cuda_state = state.get("torch_cuda", [])
+    if cuda_state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(cuda_state)
+    available = generators or {}
+    for name, generator_state in state.get("generators", {}).items():
+        if name not in available:
+            raise ValueError(f"checkpoint requires missing generator: {name}")
+        available[name].set_state(generator_state)
+
+
+class RunStore:
+    """Config-addressed run directory with immutable completion semantics."""
+
+    def __init__(self, config: ExperimentConfig) -> None:
+        self.config = config
+        self.digest = config_digest(config)
+        slug = "-".join(config.output.run_name.lower().split())
+        slug = "".join(character for character in slug if character.isalnum() or character in "-_")
+        self.run_dir = config.output.root / f"{slug}-{self.digest[:12]}"
+        self.replaced_run: Path | None = None
+
+    def _read_state(self) -> RunState:
+        try:
+            payload = json.loads((self.run_dir / "state.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"cannot resume invalid state: {error}") from error
+        if payload.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+            raise ValueError("cannot resume incompatible state schema")
+        if payload.get("config_digest") != self.digest:
+            raise ValueError("cannot resume: config digest does not match")
+        return RunState(
+            schema_version=payload["schema_version"],
+            config_digest=payload["config_digest"],
+            status=RunStatus(payload["status"]),
+            stages=payload.get("stages", {}),
+            events=payload.get("events", []),
+        )
+
+    def _write_state(self, state: RunState) -> None:
+        payload = asdict(state)
+        payload["status"] = state.status.value
+        atomic_write_json(self.run_dir / "state.json", payload)
+
+    def prepare(self, *, resume: bool = False, replace: bool = False) -> str:
+        if resume and replace:
+            raise ValueError("resume and replace are mutually exclusive")
+        complete = self.run_dir / "COMPLETE"
+        if self.run_dir.exists() and complete.exists():
+            if resume:
+                raise ValueError("cannot resume a complete run")
+            if not replace:
+                return "complete"
+        replacement_event: dict[str, Any] | None = None
+        if self.run_dir.exists() and replace:
+            suffix = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+            self.replaced_run = self.run_dir.with_name(f"{self.run_dir.name}.replaced.{suffix}")
+            os.replace(self.run_dir, self.replaced_run)
+            replacement_event = {
+                "type": "run_replaced",
+                "timestamp": _utc_now(),
+                "previous_run": self.replaced_run.name,
+            }
+        elif self.run_dir.exists():
+            if not resume:
+                raise ValueError("incomplete run exists; use resume=True or replace=True")
+            self._read_state()
+            return "resumed"
+
+        self.run_dir.mkdir(parents=True)
+        for directory in ("checkpoints", "artifacts", "logs"):
+            (self.run_dir / directory).mkdir()
+        atomic_write_json(self.run_dir / "config.json", config_to_dict(self.config))
+        state = RunState(
+            schema_version=MANIFEST_SCHEMA_VERSION,
+            config_digest=self.digest,
+            status=RunStatus.CREATED,
+            events=[replacement_event] if replacement_event else [],
+        )
+        self._write_state(state)
+        return "created"
+
+    @staticmethod
+    def save_checkpoint(path: str | Path, checkpoint: CheckpointState) -> None:
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+        )
+        os.close(fd)
+        temporary = Path(temporary_name)
+        try:
+            torch.save(asdict(checkpoint), temporary)
+            with temporary.open("rb+") as stream:
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def load_checkpoint(path: str | Path, *, config_digest: str) -> CheckpointState:
+        payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+        if payload.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+            raise ValueError("checkpoint schema is incompatible")
+        if payload.get("config_digest") != config_digest:
+            raise ValueError("checkpoint config digest does not match")
+        return CheckpointState(**payload)

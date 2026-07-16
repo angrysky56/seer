@@ -18,15 +18,15 @@ from seer.config import (
     config_digest,
 )
 from seer.runtime import (
+    CheckpointState,
+    RunLock,
+    RunStore,
     atomic_write_bytes,
     capture_rng_state,
-    CheckpointState,
     collect_provenance,
     finalize_run,
     inventory_artifact,
     restore_rng_state,
-    RunLock,
-    RunStore,
     validate_artifacts,
 )
 
@@ -193,10 +193,20 @@ def test_checkpoint_rng_and_position_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "checkpoints" / "step-12.pt"
     RunStore.save_checkpoint(path, checkpoint)
 
-    expected = (random.random(), np.random.random(), torch.rand(1), torch.rand(1, generator=generator))
+    expected = (
+        random.random(),
+        np.random.random(),
+        torch.rand(1),
+        torch.rand(1, generator=generator),
+    )
     loaded = RunStore.load_checkpoint(path, config_digest="digest")
     restore_rng_state(loaded.rng_state, generators={"sampler": generator})
-    actual = (random.random(), np.random.random(), torch.rand(1), torch.rand(1, generator=generator))
+    actual = (
+        random.random(),
+        np.random.random(),
+        torch.rand(1),
+        torch.rand(1, generator=generator),
+    )
     assert actual[0] == expected[0]
     assert actual[1] == expected[1]
     assert torch.equal(actual[2], expected[2])
