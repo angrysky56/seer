@@ -19,11 +19,13 @@ section 3 says are required to learn state-tracking at all.
 
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 import torch
 from torch import Tensor, nn
 
+from seer.cache import ResolvedSnapshot, require_transformers_version, resolve_cached_snapshot
 from seer.config import ModelConfig
 from seer.energy import EnergyHead, SelfCertainty
 
@@ -76,15 +78,38 @@ class SeerPathAModel(nn.Module):
                 p.requires_grad_(False)
 
     @classmethod
-    def from_pretrained(cls, config: ModelConfig) -> SeerPathAModel:
-        """Load ``config.base_model_name`` from the HF hub and wrap it.
+    def from_pretrained(
+        cls,
+        config: ModelConfig,
+        *,
+        snapshot: ResolvedSnapshot | None = None,
+        resolver: Callable[..., str] | None = None,
+        loader: Callable[..., Any] | None = None,
+        transformers_version: str | None = None,
+    ) -> SeerPathAModel:
+        """Verify and load one exact cached snapshot without a network fallback."""
+        require_transformers_version(transformers_version)
+        if not config.local_files_only:
+            raise ValueError("SeerPathAModel requires local_files_only=True")
+        if config.revision is None:
+            raise ValueError("model.revision is required for exact cached loading")
+        if snapshot is None:
+            snapshot = resolve_cached_snapshot(
+                config.base_model_name,
+                config.revision,
+                cache_dir=config.cache_dir,
+                resolver=resolver,
+            )
+        if (snapshot.repository_id, snapshot.revision) != (
+            config.base_model_name,
+            config.revision,
+        ):
+            raise ValueError("verified snapshot identity does not match the model configuration")
+        if loader is None:
+            from transformers import AutoModelForCausalLM
 
-        Requires network access / a cached checkpoint; not used in unit tests.
-        Construct directly with a fake ``base_model`` for testing instead.
-        """
-        from transformers import AutoModelForCausalLM
-
-        base_model = AutoModelForCausalLM.from_pretrained(config.base_model_name)
+            loader = AutoModelForCausalLM.from_pretrained
+        base_model = loader(snapshot.snapshot_path, local_files_only=True)
         return cls(base_model, config)
 
     def _commit_hidden_states(self, hidden_states: tuple[Tensor, ...]) -> Tensor:

@@ -10,7 +10,6 @@ from seer.cache import (
     verify_snapshot_files,
 )
 
-
 REPOSITORY = "Qwen/Qwen3-0.6B"
 REVISION = "c1899de289a04d12100db370d81485cdf75e47ca"
 

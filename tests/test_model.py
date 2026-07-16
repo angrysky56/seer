@@ -1,10 +1,10 @@
-import torch
 import pytest
+import torch
+from fakes import FakeBaseLM
 
-from seer.cache import ResolvedSnapshot
+from seer.cache import ModelCacheError, ResolvedSnapshot
 from seer.config import ModelConfig
 from seer.model import SeerPathAModel
-from fakes import FakeBaseLM
 
 
 def _build(freeze_base: bool = True) -> tuple[SeerPathAModel, int, int]:
@@ -131,4 +131,35 @@ def test_from_pretrained_rejects_unverified_identity_before_loader(tmp_path) -> 
 
     with pytest.raises(ValueError, match="does not match"):
         SeerPathAModel.from_pretrained(config, snapshot=snapshot, loader=loader)
+    assert calls == 0
+
+
+def test_from_pretrained_rejects_old_transformers_before_loader(tmp_path) -> None:
+    snapshot = ResolvedSnapshot(
+        repository_id="Qwen/Qwen3-0.6B",
+        revision="c1899de289a04d12100db370d81485cdf75e47ca",
+        snapshot_path=tmp_path / "snapshot",
+        cache_dir=tmp_path,
+        metadata_hashes={},
+    )
+    calls = 0
+
+    def loader(path, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("loader must not run")
+
+    config = ModelConfig(
+        base_model_name=snapshot.repository_id,
+        revision=snapshot.revision,
+        cache_dir=tmp_path,
+    )
+
+    with pytest.raises(ModelCacheError, match=r"4\.51"):
+        SeerPathAModel.from_pretrained(
+            config,
+            snapshot=snapshot,
+            loader=loader,
+            transformers_version="4.50.3",
+        )
     assert calls == 0
