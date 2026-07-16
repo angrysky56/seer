@@ -57,10 +57,12 @@ def test_atomic_failure_never_promotes_partial_file(tmp_path: Path) -> None:
 def test_hash_inventory_detects_tamper_and_deletion(tmp_path: Path) -> None:
     artifact = tmp_path / "artifacts" / "results.json"
     atomic_write_bytes(artifact, b'{}\n')
-    record = inventory_artifact(tmp_path, artifact, media_type="application/json", schema_type="result")
+    record = inventory_artifact(
+        tmp_path, artifact, media_type="application/json", schema_type="result"
+    )
     validate_artifacts(tmp_path, [record])
 
-    artifact.write_bytes(b"tampered")
+    artifact.write_bytes(b'[]\n')
     with pytest.raises(ValueError, match="hash mismatch"):
         validate_artifacts(tmp_path, [record])
     artifact.unlink()
@@ -111,7 +113,7 @@ def test_tamper_blocks_finalization(tmp_path: Path) -> None:
     artifact = run_dir / "artifacts" / "results.json"
     atomic_write_bytes(artifact, b"original")
     record = inventory_artifact(run_dir, artifact)
-    artifact.write_bytes(b"changed")
+    artifact.write_bytes(b"tampered")
 
     with pytest.raises(ValueError, match="hash mismatch"):
         finalize_run(run_dir, config, [record], provenance={})
