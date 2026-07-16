@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -140,7 +141,7 @@ class GenerationRunner:
             list(prompt.messages), tokenize=True, add_generation_prompt=True,
             enable_thinking=regime.thinking_enabled, return_tensors="pt",
         )
-        if isinstance(ids, dict):
+        if isinstance(ids, Mapping):
             if "input_ids" not in ids:
                 raise GenerationError("chat template did not return input_ids")
             ids = ids["input_ids"]
