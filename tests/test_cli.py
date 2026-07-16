@@ -5,7 +5,6 @@ import pytest
 from seer.cli import COMMANDS, Invocation, build_parser, main
 from seer.config import load_config
 
-
 EXAMPLE = Path(__file__).parents[1] / "examples" / "synthetic.json"
 
 

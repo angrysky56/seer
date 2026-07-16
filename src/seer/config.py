@@ -141,10 +141,11 @@ def _decode(value: Any, annotation: Any, path: str) -> Any:
             raise ConfigError(f"{path}: expected list")
         return [_decode(item, args[0], f"{path}[{index}]") for index, item in enumerate(value)]
     if origin is tuple:
-        if not isinstance(value, (list, tuple)) or len(value) != len(args):
+        if not isinstance(value, list | tuple) or len(value) != len(args):
             raise ConfigError(f"{path}: expected {len(args)} values")
-        return tuple(_decode(item, kind, f"{path}[{index}]") for index, (item, kind) in enumerate(zip(value, args, strict=True)))
-    if annotation is float and isinstance(value, (int, float)) and not isinstance(value, bool):
+        pairs = enumerate(zip(value, args, strict=True))
+        return tuple(_decode(item, kind, f"{path}[{index}]") for index, (item, kind) in pairs)
+    if annotation is float and isinstance(value, int | float) and not isinstance(value, bool):
         return float(value)
     if annotation in (str, int, bool) and type(value) is not annotation:
         raise ConfigError(f"{path}: expected {annotation.__name__}")
@@ -173,14 +174,22 @@ def _decode_dataclass(value: Any, cls: type[Any], path: str) -> Any:
 
 def _validate(config: ExperimentConfig) -> None:
     checks = (
-        (config.schema_version == SCHEMA_VERSION, "schema_version", f"unsupported version {config.schema_version}"),
+        (
+            config.schema_version == SCHEMA_VERSION,
+            "schema_version",
+            f"unsupported version {config.schema_version}",
+        ),
         (bool(config.name.strip()), "name", "must not be empty"),
         (config.model.concept_dim > 0, "model.concept_dim", "must be positive"),
         (config.train.max_steps > 0, "train.max_steps", "must be positive"),
         (config.train.batch_size > 0, "train.batch_size", "must be positive"),
         (config.runtime.checkpoint_interval > 0, "runtime.checkpoint_interval", "must be positive"),
         (config.calibration.ece_bins > 1, "calibration.ece_bins", "must exceed one"),
-        (len(set(config.seeds.training)) == len(config.seeds.training), "seeds.training", "must be unique"),
+        (
+            len(set(config.seeds.training)) == len(config.seeds.training),
+            "seeds.training",
+            "must be unique",
+        ),
     )
     for valid, path, message in checks:
         if not valid:
@@ -211,7 +220,9 @@ def config_to_dict(config: ExperimentConfig) -> dict[str, Any]:
 
 
 def canonical_config_json(config: ExperimentConfig) -> str:
-    return json.dumps(config_to_dict(config), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        config_to_dict(config), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
 
 
 def config_digest(config: ExperimentConfig) -> str:

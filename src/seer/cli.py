@@ -1,0 +1,95 @@
+"""Auditable command-line surface for SEER experiments."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+from seer.config import ConfigError, ExperimentConfig, load_config
+
+COMMANDS = (
+    "prepare-data",
+    "cache-outputs",
+    "train",
+    "evaluate",
+    "run-matrix",
+    "build-report",
+    "smoke",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Invocation:
+    command: str
+    config: Path
+    output_root: Path | None
+    resume: bool
+    replace: bool
+    offline: bool
+
+
+Handler = Callable[[Invocation, ExperimentConfig], int]
+
+
+class _InvocationParser(argparse.ArgumentParser):
+    def parse_args(self, args: Sequence[str] | None = None, namespace=None) -> Invocation:
+        parsed = super().parse_args(args, namespace)
+        return Invocation(
+            command=parsed.command,
+            config=parsed.config,
+            output_root=parsed.output_root,
+            resume=parsed.resume,
+            replace=parsed.replace,
+            offline=parsed.offline,
+        )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = _InvocationParser(prog="seer", description="Run auditable SEER experiments")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in COMMANDS:
+        child = subparsers.add_parser(command)
+        child.add_argument("--config", required=True, type=Path)
+        child.add_argument("--output-root", type=Path)
+        policy = child.add_mutually_exclusive_group()
+        policy.add_argument("--resume", action="store_true")
+        policy.add_argument("--replace", action="store_true")
+        child.add_argument("--offline", action="store_true")
+    return parser
+
+
+def _effective_config(config: ExperimentConfig, invocation: Invocation) -> ExperimentConfig:
+    output = config.output
+    runtime = config.runtime
+    if invocation.output_root is not None:
+        output = replace(output, root=invocation.output_root)
+    if invocation.offline:
+        runtime = replace(runtime, offline=True)
+    return replace(config, output=output, runtime=runtime)
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    handlers: Mapping[str, Handler] | None = None,
+) -> int:
+    """Parse and dispatch without importing model or dataset implementations."""
+    invocation = build_parser().parse_args(argv)
+    try:
+        config = _effective_config(load_config(invocation.config), invocation)
+    except ConfigError as error:
+        print(f"seer: {error}", file=sys.stderr)
+        return 2
+
+    handler = (handlers or {}).get(invocation.command)
+    if handler is not None:
+        return handler(invocation, config)
+    print(f"seer: {invocation.command} is not yet implemented", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

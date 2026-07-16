@@ -10,6 +10,9 @@ dependencies = [
     "scikit-learn>=1.4",
 ]
 
+[project.scripts]
+seer = "seer.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",
