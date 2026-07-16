@@ -30,6 +30,8 @@ class Invocation:
     replace: bool
     offline: bool
     allow_download: bool = False
+    babi_archive: Path | None = None
+    babi_metadata: Path | None = None
 
 
 Handler = Callable[[Invocation, ExperimentConfig], int]
@@ -46,6 +48,8 @@ class _InvocationParser(argparse.ArgumentParser):
             replace=parsed.replace,
             offline=parsed.offline,
             allow_download=getattr(parsed, "allow_download", False),
+            babi_archive=getattr(parsed, "babi_archive", None),
+            babi_metadata=getattr(parsed, "babi_metadata", None),
         )
 
 
@@ -62,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
         child.add_argument("--offline", action="store_true")
         if command == "prepare-data":
             child.add_argument("--allow-download", action="store_true")
+            child.add_argument("--babi-archive", type=Path)
+            child.add_argument("--babi-metadata", type=Path)
     return parser
 
 
@@ -96,7 +102,9 @@ def main(
 
         try:
             prepare_data(config.datasets, config.output.root,
-                         allow_download=invocation.allow_download)
+                         allow_download=invocation.allow_download,
+                         babi_archive=invocation.babi_archive,
+                         babi_metadata=invocation.babi_metadata)
         except (OSError, PreparationError, ValueError) as error:
             print(f"seer: prepare-data failed: {error}", file=sys.stderr)
             return 2

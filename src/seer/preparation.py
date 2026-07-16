@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import json
 import shutil
 import tempfile
+import zipfile
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
@@ -39,6 +41,40 @@ class PreparationError(RuntimeError):
 BABI_REPOSITORY = "facebook/babi_qa"
 BABI_REVISION = "ab3777b46c6c0d9a4513cd3b82ea6562293837a8"
 BABI_ARCHIVE_SHA256 = "0364ebde659f14d11bc21744516c5ec49d3d06cb692733f66680771244998898"
+KAGGLE_ZIP_SHA256 = "50e529ad9c7144a2b176802f7496f5878d53b4e95d93cb0de957517fa84b09b2"
+KAGGLE_METADATA_SHA256 = "e12c94afee4985d580eba8f299065059d990bf65119e41d78a346c937f24790d"
+BABI_BUILDER_SHA256 = "d73dcc678a09f5a1bba25bbb319cab04ef1fc78af9730771dbeef25d59a73fc1"
+BABI_LICENSE_SHA256 = "d12f09a636365a040fd581ebab6bf018d6fe61973c6d4862f841a6aca2f53efa"
+BABI_README_SHA256 = "187382307f23056d1cf6b24c4b583be61513570c1d9d473bffd65f5a59e7eca3"
+BABI_MEMBERS = {
+    ("en-valid-10k-qa1", "train"): (
+        "qa1_train.txt", "6f3dad60b5001427caf740404d6106aaea7257dc8e75a73afd4289475bed705a",
+        1800, 9000),
+    ("en-valid-10k-qa1", "validation"): (
+        "qa1_valid.txt", "a7a41a89ca009b00cd5869bb949f47bb21c3b5c4df424cd1795a5e6067f0562e",
+        200, 1000),
+    ("en-valid-10k-qa1", "test"): (
+        "qa1_test.txt", "55acf66cef2f6d798e2aa1d056e1ec8f24e910ea9215b639450574321132959b",
+        200, 1000),
+    ("en-valid-10k-qa2", "train"): (
+        "qa2_train.txt", "e074f5119e67bca02338882e5fc50616a271d824dfde977f9c643fd3fa8748c5",
+        1800, 9000),
+    ("en-valid-10k-qa2", "validation"): (
+        "qa2_valid.txt", "cf3cb2877eada0bff7e84fe0cbbcc70fb45ea855c583fe963c6eb25c426726cc",
+        200, 1000),
+    ("en-valid-10k-qa2", "test"): (
+        "qa2_test.txt", "eff93fb9cd81ba02eb765772cf7cc269769ed44ec71cbbbc19cfb16ee5eba0f6",
+        200, 1000),
+    ("en-valid-10k-qa3", "train"): (
+        "qa3_train.txt", "c1994f75f434f58115bcbfedfa728917c748e80f2191ffbf21e56cd52851304a",
+        1800, 9000),
+    ("en-valid-10k-qa3", "validation"): (
+        "qa3_valid.txt", "8da018e1b079299c25b34c62a509cde6b9820735c398357e69d1d72a1cc54537",
+        200, 1000),
+    ("en-valid-10k-qa3", "test"): (
+        "qa3_test.txt", "17795c977100baf8188f386522ae301b62d6c1a13efc01b3aea781e588b4d57f",
+        200, 1000),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +97,7 @@ class ResolvedDataset:
     builder_name: str | None = None
     builder_hash: str | None = None
     archive_hash: str | None = None
+    source_chain: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +114,7 @@ class LockedDataset:
     builder_name: str | None
     builder_hash: str | None
     archive_hash: str | None
+    source_chain: dict[str, Any] | None
     normalized_shards: dict[str, str]
 
 
@@ -205,6 +243,7 @@ def stage_dataset_sources(
                 builder_name=resolved.builder_name,
                 builder_hash=resolved.builder_hash,
                 archive_hash=resolved.archive_hash,
+                source_chain=resolved.source_chain,
                 normalized_shards=hashes,
             ))
         version = datasets_version or importlib.metadata.version("datasets")
@@ -223,9 +262,18 @@ def prepare_data(
     datasets_version: str | None = None,
     corruptions: Iterable[CorruptionRecord] = (),
     before_complete: Any | None = None,
+    babi_archive: str | Path | None = None,
+    babi_metadata: str | Path | None = None,
 ) -> None:
     """Stage sources, audit them, and publish a generation-eligible corpus atomically."""
     destination = Path(root)
+    if (babi_archive is None) != (babi_metadata is None):
+        raise PreparationError("--babi-archive and --babi-metadata must be provided together")
+    if babi_archive is not None and not allow_download:
+        raise PreparationError("local bAbI source requires explicit --allow-download")
+    if babi_archive is not None and resolver is None and loader is None:
+        backend = LocalBabiBackend(Path(babi_archive), Path(babi_metadata))
+        resolver = loader = backend
     if (destination / "COMPLETE").exists():
         raise PreparationError("prepared corpus is already complete and immutable")
     if not (destination / "staging" / "dataset-lock.json").exists():
@@ -358,3 +406,102 @@ class HuggingFaceDatasetBackend:
     def load(self, resolved: ResolvedDataset, split: str) -> Iterable[Mapping[str, Any]]:
         key = (resolved.repository_id, resolved.config_name, resolved.resolved_revision)
         return self._datasets[key][split]
+
+
+class LocalBabiBackend:
+    """Hash-locked local bAbI repack parser; never executes archive code."""
+
+    def __init__(self, archive: Path, metadata: Path) -> None:
+        if sha256_file(archive) != KAGGLE_ZIP_SHA256:
+            raise PreparationError("local bAbI archive hash mismatch")
+        if sha256_file(metadata) != KAGGLE_METADATA_SHA256:
+            raise PreparationError("local bAbI metadata hash mismatch")
+        facts = json.loads(metadata.read_text())
+        if facts.get("version") != 1 or "CC BY 3.0" not in facts.get("license", {}).get("name", ""):
+            raise PreparationError("local bAbI metadata version/license mismatch")
+        self.archive, self.metadata, self.delegate = archive, metadata, HuggingFaceDatasetBackend()
+        self._rows: dict[tuple[str, str], tuple[Mapping[str, Any], ...]] = {}
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+            if len(names) != len(set(names)):
+                raise PreparationError("local bAbI archive contains duplicate members")
+            if any(Path(name).is_absolute() or ".." in Path(name).parts for name in names):
+                raise PreparationError("local bAbI archive contains unsafe member paths")
+            self._verify_member(bundle, "tasks_1-20_v1-2/LICENSE.txt", BABI_LICENSE_SHA256)
+            self._verify_member(bundle, "tasks_1-20_v1-2/README.txt", BABI_README_SHA256)
+            for (config, split), (filename, digest, stories, questions) in BABI_MEMBERS.items():
+                path = f"tasks_1-20_v1-2/en-valid-10k/{filename}"
+                payload = self._verify_member(bundle, path, digest)
+                rows = self._parse(payload, config)
+                if len(rows) != stories or sum(
+                    bool(line.get("answer")) for row in rows for line in row["story"]
+                ) != questions:
+                    raise PreparationError(f"local bAbI member count mismatch: {path}")
+                self._rows[(config, split)] = rows
+
+    @staticmethod
+    def _verify_member(bundle: zipfile.ZipFile, path: str, expected: str) -> bytes:
+        try:
+            payload = bundle.read(path)
+        except KeyError as error:
+            raise PreparationError(f"local bAbI member missing: {path}") from error
+        if hashlib.sha256(payload).hexdigest() != expected:
+            raise PreparationError(f"local bAbI member hash mismatch: {path}")
+        return payload
+
+    @staticmethod
+    def _parse(payload: bytes, config: str) -> tuple[Mapping[str, Any], ...]:
+        try:
+            lines = payload.decode("utf-8").splitlines()
+        except UnicodeDecodeError as error:
+            raise PreparationError("local bAbI member is not UTF-8") from error
+        rows, story = [], []
+        task_no = int(config.rsplit("qa", 1)[1])
+        for raw in lines:
+            fields = raw.split("\t")
+            head = fields[0].split(" ", 1)
+            if len(head) != 2 or not head[0].isdigit() or len(fields) not in (1, 3):
+                raise PreparationError("malformed local bAbI line")
+            line_id, text = int(head[0]), head[1]
+            if line_id == 1 and story:
+                rows.append({"id": str(len(rows)), "task_no": task_no, "story": story})
+                story = []
+            if fields[1:]:
+                supporting = fields[2].split()
+                if any(not item.isdigit() or int(item) >= line_id for item in supporting):
+                    raise PreparationError("invalid local bAbI supporting IDs")
+                story.append({"id": str(line_id), "text": text, "answer": fields[1],
+                              "supporting_ids": supporting})
+            else:
+                story.append({"id": str(line_id), "text": text, "answer": "",
+                              "supporting_ids": []})
+        if story:
+            rows.append({"id": str(len(rows)), "task_no": task_no, "story": story})
+        return tuple(rows)
+
+    def resolve(self, spec: DatasetSpec) -> ResolvedDataset:
+        if spec.repository_id != BABI_REPOSITORY:
+            return self.delegate.resolve(spec)
+        if spec.requested_revision != BABI_REVISION:
+            raise PreparationError("local bAbI source revision mismatch")
+        splits = {split: BABI_MEMBERS[(spec.config_name, split)][2] for split in spec.splits}
+        member_facts = {split: {"path": BABI_MEMBERS[(spec.config_name, split)][0],
+                                "sha256": BABI_MEMBERS[(spec.config_name, split)][1],
+                                "story_count": BABI_MEMBERS[(spec.config_name, split)][2],
+                                "question_count": BABI_MEMBERS[(spec.config_name, split)][3]}
+                        for split in spec.splits}
+        chain = {"source_kind": "kaggle-local-repack", "kaggle_dataset_version": 1,
+                 "metadata_sha256": KAGGLE_METADATA_SHA256,
+                 "repack_archive_sha256": KAGGLE_ZIP_SHA256,
+                 "upstream_declared_hash": BABI_ARCHIVE_SHA256,
+                 "license_sha256": BABI_LICENSE_SHA256, "readme_sha256": BABI_README_SHA256,
+                 "members": member_facts}
+        fingerprint = hashlib.sha256(canonical_json_bytes(chain)).hexdigest()
+        return ResolvedDataset(BABI_REPOSITORY, BABI_REVISION, BABI_REVISION, spec.config_name,
+                               splits, {"story": "structured-list"}, "CC-BY-3.0", fingerprint,
+                               (), "babi_qa", BABI_BUILDER_SHA256, KAGGLE_ZIP_SHA256, chain)
+
+    def load(self, resolved: ResolvedDataset, split: str) -> Iterable[Mapping[str, Any]]:
+        if resolved.repository_id != BABI_REPOSITORY:
+            return self.delegate.load(resolved, split)
+        return self._rows[(resolved.config_name, split)]

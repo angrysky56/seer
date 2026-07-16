@@ -1,5 +1,6 @@
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from seer.preparation import (
     BABI_REVISION,
     DatasetSourceFile,
     HuggingFaceDatasetBackend,
+    LocalBabiBackend,
     PreparationError,
     ResolvedDataset,
     load_and_verify_staging,
@@ -87,6 +89,54 @@ def test_babi_remote_code_rejects_every_other_revision():
                        ["train"], "CC-BY-3.0", {})
     with pytest.raises(PreparationError, match="only at the frozen exact commit"):
         HuggingFaceDatasetBackend().resolve(spec)
+
+
+def test_local_babi_backend_verifies_and_parses_without_custom_code(monkeypatch, tmp_path):
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps({"version": 1, "license": {"name": "CC BY 3.0"}}))
+    payloads = {
+        "tasks_1-20_v1-2/LICENSE.txt": b"license",
+        "tasks_1-20_v1-2/README.txt": b"readme",
+        "tasks_1-20_v1-2/en-valid-10k/qa1_train.txt":
+            b"1 Mary went to the hall.\n2 Where is Mary?\thall\t1\n",
+    }
+    archive = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for name, value in payloads.items():
+            bundle.writestr(name, value)
+    monkeypatch.setattr("seer.preparation.KAGGLE_ZIP_SHA256",
+                        hashlib.sha256(archive.read_bytes()).hexdigest())
+    monkeypatch.setattr("seer.preparation.KAGGLE_METADATA_SHA256",
+                        hashlib.sha256(metadata.read_bytes()).hexdigest())
+    monkeypatch.setattr("seer.preparation.BABI_LICENSE_SHA256",
+                        hashlib.sha256(payloads["tasks_1-20_v1-2/LICENSE.txt"]).hexdigest())
+    monkeypatch.setattr("seer.preparation.BABI_README_SHA256",
+                        hashlib.sha256(payloads["tasks_1-20_v1-2/README.txt"]).hexdigest())
+    member = payloads["tasks_1-20_v1-2/en-valid-10k/qa1_train.txt"]
+    monkeypatch.setattr("seer.preparation.BABI_MEMBERS", {
+        ("en-valid-10k-qa1", "train"):
+            ("qa1_train.txt", hashlib.sha256(member).hexdigest(), 1, 1)})
+    backend = LocalBabiBackend(archive, metadata)
+    resolved = backend.resolve(DatasetSpec(
+        "babi", "facebook/babi_qa", "en-valid-10k-qa1", BABI_REVISION,
+        ["train"], "CC-BY-3.0", {"train": 1}))
+    rows = tuple(backend.load(resolved, "train"))
+    assert rows[0]["story"][1]["answer"] == "hall"
+    assert resolved.source_chain["source_kind"] == "kaggle-local-repack"
+
+
+def test_local_babi_backend_rejects_unsafe_archive_member(monkeypatch, tmp_path):
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps({"version": 1, "license": {"name": "CC BY 3.0"}}))
+    archive = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("../escape", b"bad")
+    monkeypatch.setattr("seer.preparation.KAGGLE_ZIP_SHA256",
+                        hashlib.sha256(archive.read_bytes()).hexdigest())
+    monkeypatch.setattr("seer.preparation.KAGGLE_METADATA_SHA256",
+                        hashlib.sha256(metadata.read_bytes()).hexdigest())
+    with pytest.raises(PreparationError, match="unsafe member"):
+        LocalBabiBackend(archive, metadata)
 
 
 def spec(domain: str, config: str = "main") -> DatasetSpec:
