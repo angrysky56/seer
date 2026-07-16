@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -6,6 +7,8 @@ import pytest
 from seer.adapters import AdapterError, BabiAdapter, Gsm8kAdapter, ProofWriterAdapter
 from seer.config import DatasetSpec, load_config
 from seer.preparation import (
+    BABI_ARCHIVE_SHA256,
+    BABI_REVISION,
     DatasetSourceFile,
     HuggingFaceDatasetBackend,
     PreparationError,
@@ -38,6 +41,52 @@ def test_dataset_backend_accepts_mapping_shaped_split_metadata(monkeypatch):
                        ["train", "test"], "MIT", {"train": 2, "test": 1})
     resolved = HuggingFaceDatasetBackend().resolve(spec)
     assert resolved.splits == {"train": 2, "test": 1}
+
+
+def test_babi_remote_code_is_exact_commit_scoped_and_hash_locked(monkeypatch, tmp_path):
+    builder = tmp_path / "babi_qa.py"
+    builder.write_text("# exact pinned loader\n")
+    calls = []
+
+    class Info:
+        sha = BABI_REVISION
+        siblings = []
+
+    class ConfigInfo:
+        splits = {"train": {"num_examples": 1}}
+        features = type("Features", (), {"to_dict": lambda self: {"story": "list"}})()
+        builder_name = "babi_qa"
+
+    split_info = type("SplitInfo", (), {
+        "download_checksums": {"archive": {"checksum": BABI_ARCHIVE_SHA256}}})()
+    loaded = {"train": type("Split", (), {"_fingerprint": "fp", "info": split_info})()}
+    monkeypatch.setattr("huggingface_hub.HfApi.dataset_info", lambda *args, **kwargs: Info())
+    monkeypatch.setattr("huggingface_hub.hf_hub_download",
+                        lambda *args, **kwargs: str(builder))
+
+    def config_info(*args, **kwargs):
+        calls.append(("info", kwargs))
+        return ConfigInfo()
+
+    def load(*args, **kwargs):
+        calls.append(("load", kwargs))
+        return loaded
+
+    monkeypatch.setattr("datasets.get_dataset_config_info", config_info)
+    monkeypatch.setattr("datasets.load_dataset", load)
+    spec = DatasetSpec("babi", "facebook/babi_qa", "en-valid-10k-qa1", BABI_REVISION,
+                       ["train"], "CC-BY-3.0", {"train": 1})
+    resolved = HuggingFaceDatasetBackend().resolve(spec)
+    assert all(call[1]["trust_remote_code"] is True for call in calls)
+    assert resolved.builder_hash == hashlib.sha256(builder.read_bytes()).hexdigest()
+    assert resolved.archive_hash == BABI_ARCHIVE_SHA256
+
+
+def test_babi_remote_code_rejects_every_other_revision():
+    spec = DatasetSpec("babi", "facebook/babi_qa", "en-valid-10k-qa1", "a" * 40,
+                       ["train"], "CC-BY-3.0", {})
+    with pytest.raises(PreparationError, match="only at the frozen exact commit"):
+        HuggingFaceDatasetBackend().resolve(spec)
 
 
 def spec(domain: str, config: str = "main") -> DatasetSpec:

@@ -36,6 +36,11 @@ class PreparationError(RuntimeError):
     """A dataset source cannot be staged without weakening its declared contract."""
 
 
+BABI_REPOSITORY = "facebook/babi_qa"
+BABI_REVISION = "ab3777b46c6c0d9a4513cd3b82ea6562293837a8"
+BABI_ARCHIVE_SHA256 = "0364ebde659f14d11bc21744516c5ec49d3d06cb692733f66680771244998898"
+
+
 @dataclass(frozen=True, slots=True)
 class DatasetSourceFile:
     path: str
@@ -301,15 +306,40 @@ class HuggingFaceDatasetBackend:
 
     def resolve(self, spec: DatasetSpec) -> ResolvedDataset:
         from datasets import get_dataset_config_info, load_dataset
-        from huggingface_hub import HfApi
+        from huggingface_hub import HfApi, hf_hub_download
+
+        if spec.repository_id == BABI_REPOSITORY and spec.requested_revision != BABI_REVISION:
+            raise PreparationError("bAbI custom loader is allowed only at the frozen exact commit")
 
         info = HfApi().dataset_info(spec.repository_id, revision=spec.requested_revision,
                                     files_metadata=True)
         commit = info.sha
         if not commit:
             raise PreparationError("dataset revision did not resolve")
-        config_info = get_dataset_config_info(spec.repository_id, spec.config_name, revision=commit)
-        loaded = load_dataset(spec.repository_id, spec.config_name, revision=commit)
+        trusted_babi = spec.repository_id == BABI_REPOSITORY and commit == BABI_REVISION
+        config_kwargs = {"trust_remote_code": True} if trusted_babi else {}
+        builder_hash = None
+        if trusted_babi:
+            builder_path = Path(hf_hub_download(
+                spec.repository_id, "babi_qa.py", repo_type="dataset", revision=commit,
+            ))
+            builder_hash = sha256_file(builder_path)
+            if len(builder_hash) != 64:
+                raise PreparationError("bAbI builder code hash is unavailable")
+        config_info = get_dataset_config_info(
+            spec.repository_id, spec.config_name, revision=commit, **config_kwargs)
+        loaded = load_dataset(
+            spec.repository_id, spec.config_name, revision=commit, **config_kwargs)
+        archive_hash = None
+        if trusted_babi:
+            checksums = getattr(next(iter(loaded.values())).info, "download_checksums", None)
+            available = {
+                str(fact.get("checksum"))
+                for fact in (checksums or {}).values() if isinstance(fact, Mapping)
+            }
+            if BABI_ARCHIVE_SHA256 not in available:
+                raise PreparationError("bAbI upstream archive SHA-256 is unavailable or mismatched")
+            archive_hash = BABI_ARCHIVE_SHA256
         self._datasets[(spec.repository_id, spec.config_name, commit)] = loaded
         files = tuple(DatasetSourceFile(item.rfilename, item.lfs.sha256)
                       for item in (info.siblings or []) if item.lfs and item.lfs.sha256)
@@ -322,7 +352,8 @@ class HuggingFaceDatasetBackend:
         fingerprint = "|".join(str(loaded[name]._fingerprint) for name in sorted(loaded))
         return ResolvedDataset(spec.repository_id, spec.requested_revision, commit,
                                spec.config_name, splits, features, spec.expected_license,
-                               fingerprint, files, config_info.builder_name)
+                               fingerprint, files, config_info.builder_name,
+                               builder_hash, archive_hash)
 
     def load(self, resolved: ResolvedDataset, split: str) -> Iterable[Mapping[str, Any]]:
         key = (resolved.repository_id, resolved.config_name, resolved.resolved_revision)
