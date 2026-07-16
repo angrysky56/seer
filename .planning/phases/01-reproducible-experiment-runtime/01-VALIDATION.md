@@ -36,12 +36,12 @@ created: 2026-07-15
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
 | 01-01-01 | 01 | 1 | EXP-01 | — | Reject malformed/unknown config instead of guessing | unit | `uv run pytest tests/test_config.py -q` | ❌ W0 | ⬜ pending |
 | 01-01-02 | 01 | 1 | EXP-02, QUAL-04 | — | CLI errors are explicit and smoke stays synthetic/offline | unit/integration | `uv run pytest tests/test_cli.py -q` | ❌ W0 | ⬜ pending |
-| 01-02-01 | 02 | 1 | EXP-03 | — | Hash mismatch prevents artifact promotion | unit | `uv run pytest tests/test_runtime.py -q -k 'manifest or hash or tamper'` | ❌ W0 | ⬜ pending |
-| 01-02-02 | 02 | 1 | EXP-04 | — | Completed evidence is immutable; incompatible resume fails | unit | `uv run pytest tests/test_runtime.py -q -k 'resume or complete or lock'` | ❌ W0 | ⬜ pending |
+| 01-02-01 | 02 | 2 | EXP-03 | — | Hash mismatch prevents artifact promotion | unit | `uv run pytest tests/test_runtime.py -q -k 'manifest or hash or tamper'` | ❌ W0 | ⬜ pending |
+| 01-02-02 | 02 | 2 | EXP-04 | — | Completed evidence is immutable; incompatible resume fails | unit | `uv run pytest tests/test_runtime.py -q -k 'resume or complete or lock'` | ❌ W0 | ⬜ pending |
 | 01-03-01 | 03 | 2 | EXP-06 | — | Offline cache miss never falls back to network | unit | `uv run pytest tests/test_model.py tests/test_cache.py -q` | ❌ W0 | ⬜ pending |
-| 01-04-01 | 04 | 2 | EXP-05, QUAL-01 | — | Full unit suite has no external model/data dependency | integration | `uv run pytest` | ✅ existing | ⬜ pending |
-| 01-04-02 | 04 | 2 | QUAL-04 | — | Clean and resumed smoke runs have equal scientific hashes | integration | `uv run pytest tests/test_smoke.py -q` | ❌ W0 | ⬜ pending |
-| 01-04-03 | 04 | 2 | DOC-01, QUAL-02 | — | Documented commands are valid and lint is green | lint/source | `uv run ruff check .` | ✅ existing | ⬜ pending |
+| 01-04-01 | 04 | 3 | EXP-05, QUAL-01 | — | Full unit suite has no external model/data dependency | integration | `uv run pytest` | ✅ existing | ⬜ pending |
+| 01-04-02 | 04 | 3 | QUAL-04 | — | Clean and resumed smoke runs have equal scientific hashes | integration | `uv run pytest tests/test_smoke.py -q` | ❌ W0 | ⬜ pending |
+| 01-04-03 | 04 | 3 | DOC-01, QUAL-02 | — | Documented commands are valid and lint is green | lint/source | `uv run ruff check .` | ✅ existing | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

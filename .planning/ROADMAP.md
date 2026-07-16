@@ -42,6 +42,30 @@ QUAL-01, QUAL-02, QUAL-04
 3. Offline mode never attempts network access and produces an actionable cache error.
 4. Unit tests and Ruff pass without loading external weights or datasets.
 
+### Plans
+
+**Wave 1**
+
+- `01-01-PLAN.md` — strict versioned configuration and complete CLI contract.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- `01-02-PLAN.md` — transactional run store, provenance, integrity, locking, and resume.
+- `01-03-PLAN.md` — exact-revision offline Qwen3 cache and loader boundary.
+
+**Wave 3** *(blocked on Waves 1–2 completion)*
+
+- `01-04-PLAN.md` — deterministic synthetic vertical slice, operations docs, and quality gate.
+
+Cross-cutting constraints:
+
+- Tests and the synthetic smoke path remain offline and independent of cached
+  weights, external datasets, and GPU availability.
+- Runtime state fails closed: completed evidence is immutable, incompatible
+  resumes are rejected, and `COMPLETE` follows artifact validation.
+- Config, snapshot, checkpoint, seed, and artifact identities remain explicit and
+  auditable across every plan.
+
 ## Phase 2 — Multi-Domain Evidence Data
 
 **Goal:** Produce normalized, pinned, leakage-audited natural prediction records
