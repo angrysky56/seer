@@ -83,6 +83,7 @@ def test_thinking_regime_separates_thinking_and_answer_and_is_seed_stable():
     assert first.thinking_text == "work" and first.answer_text == "FINAL: true"
     assert tokenizer.calls[0][1]["enable_thinking"] is True
     assert model.calls[0][1]["max_new_tokens"] == 1024
+    assert "generator" not in model.calls[0][1]
 
 
 def test_prompt_budget_exhaustion_is_linked_and_does_not_generate():

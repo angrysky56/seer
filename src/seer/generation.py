@@ -7,6 +7,7 @@ import json
 import re
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -125,6 +126,21 @@ def _split_thinking(text: str, enabled: bool) -> tuple[str | None, str | None]:
     return match.group(1).strip(), match.group(2).strip()
 
 
+@contextmanager
+def _seeded_sampling(seed: int, device: str, enabled: bool):
+    if not enabled:
+        yield
+        return
+    devices = (
+        [torch.cuda.current_device()]
+        if device == "cuda" and torch.cuda.is_available() else [])
+    with torch.random.fork_rng(devices=devices):
+        torch.manual_seed(seed)
+        if devices:
+            torch.cuda.manual_seed_all(seed)
+        yield
+
+
 class GenerationRunner:
     def __init__(self, tokenizer: TokenizerProtocol, model: ModelProtocol, *,
                  model_id: str = QWEN3_REPOSITORY, model_revision: str = QWEN3_REVISION,
@@ -168,19 +184,18 @@ class GenerationRunner:
         kwargs = {"max_new_tokens": regime.max_new_tokens, "do_sample": regime.do_sample,
                   "num_return_sequences": 1}
         if regime.do_sample:
-            generator_device = self.device if self.device != "cuda" or torch.cuda.is_available() \
-                else "cpu"
             kwargs.update(temperature=regime.temperature, top_p=regime.top_p,
-                          top_k=regime.top_k, min_p=regime.min_p,
-                          generator=torch.Generator(device=generator_device).manual_seed(seed))
+                          top_k=regime.top_k, min_p=regime.min_p)
         try:
             model_ids = ids.to(self.device) if hasattr(ids, "to") else ids
-            output = self.model.generate(model_ids, **kwargs)
+            with _seeded_sampling(seed, self.device, regime.do_sample):
+                output = self.model.generate(model_ids, **kwargs)
             nested_output = (hasattr(output, "ndim") and output.ndim > 1) or (
                 len(output) and isinstance(output[0], (list, tuple)))
             sequence = [int(item) for item in (output[0] if nested_output else output)]
             generated = sequence[len(prompt_ids):]
-            raw = self.tokenizer.decode(generated, skip_special_tokens=False)
+            raw_tokens = self.tokenizer.decode(generated, skip_special_tokens=False)
+            raw = self.tokenizer.decode(generated, skip_special_tokens=True)
         except Exception as error:
             failure = FailureRecord(
                 _failure_id("generation", "generation_error", example.example_id, gid),
@@ -193,7 +208,9 @@ class GenerationRunner:
         exhausted = len(generated) >= regime.max_new_tokens and not (
             generated and generated[-1] in eos_ids
         )
-        thinking, answer = _split_thinking(raw, regime.thinking_enabled)
+        thinking, answer = _split_thinking(raw_tokens, regime.thinking_enabled)
+        if not regime.thinking_enabled:
+            answer = raw
         failure_id = None
         finish = (
             "length" if exhausted else
