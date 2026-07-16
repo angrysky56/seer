@@ -124,6 +124,7 @@ class TrainCheckpoint:
     optimizer_state: dict[str, Any]
     rng_state: dict[str, Any]
     data_order_state: dict[str, Any]
+    scientific_records: list[dict[str, int | float]]
 
 
 def seed_everything(seed: int) -> None:
@@ -261,6 +262,7 @@ def train_loop(
                             "next_epoch": next_epoch,
                             "next_batch": next_batch,
                         },
+                        scientific_records=[record.to_dict() for record in results],
                     )
                 )
         if batch_index >= batches_per_epoch:

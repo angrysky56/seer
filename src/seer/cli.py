@@ -87,6 +87,15 @@ def main(
     handler = (handlers or {}).get(invocation.command)
     if handler is not None:
         return handler(invocation, config)
+    if invocation.command == "smoke":
+        from seer.smoke import run_smoke
+
+        try:
+            run_smoke(config, resume=invocation.resume, replace=invocation.replace)
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"seer: smoke failed: {error}", file=sys.stderr)
+            return 2
+        return 0
     print(f"seer: {invocation.command} is not yet implemented", file=sys.stderr)
     return 2
 

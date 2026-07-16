@@ -1,11 +1,11 @@
 import torch
 
+from fakes import FakeBaseLM
 from seer.config import ModelConfig, TrainConfig
 from seer.data import Domain, SyntheticStateTrackingDataset
 from seer.model import SeerPathAModel
 from seer.optim import build_optimizer
 from seer.train import TrainCursor, joint_loss, seed_everything, train_loop
-from fakes import FakeBaseLM
 
 
 def test_joint_loss_combines_task_and_certainty_terms() -> None:
@@ -38,7 +38,14 @@ def test_joint_loss_weighting_scales_components() -> None:
     mask = torch.ones(2, 4, dtype=torch.bool)
     certainty = torch.rand(2, 4)
 
-    result = joint_loss(logits, targets, mask, certainty, task_loss_weight=2.0, energy_loss_weight=0.5)
+    result = joint_loss(
+        logits,
+        targets,
+        mask,
+        certainty,
+        task_loss_weight=2.0,
+        energy_loss_weight=0.5,
+    )
     expected = 2.0 * result.task_loss + 0.5 * result.certainty_loss
     assert torch.allclose(result.total, expected, atol=1e-5)
 
