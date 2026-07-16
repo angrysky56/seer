@@ -159,7 +159,7 @@ def test_proofwriter_fixture_verifies_labels(label: str, expected: str) -> None:
     item = next(ProofWriterAdapter().adapt(
         [{"id": "p", "theory_id": "t", "theory": "Blue(a).", "question": "Blue(a)?",
           "answer": label, "depth": 1}], spec("proofwriter", "default"), "test"))
-    assert item.gold_normalized == expected and item.group_id == "t"
+    assert item.gold_normalized == expected and item.group_id == "test:t"
 
 
 def test_babi_uses_only_prior_context_and_groups_story() -> None:
@@ -170,9 +170,21 @@ def test_babi_uses_only_prior_context_and_groups_story() -> None:
         {"text": "Where is Mary now?", "answer": "garden", "supporting_ids": [3]},
     ]}]
     first, second = BabiAdapter().adapt(rows, spec("babi", "en-valid-10k-qa1"), "train")
-    assert first.group_id == second.group_id == "s1"
+    assert first.group_id == second.group_id == "train:s1"
     assert "garden" not in first.prompt_text
     assert second.prompt_payload["context"][-1] == "Mary went to garden."
+
+
+def test_source_local_group_ids_are_qualified_by_official_split() -> None:
+    row = {"id": "s1", "task_no": 1, "story": [
+        {"text": "Mary went to kitchen.", "answer": ""},
+        {"text": "Where is Mary?", "answer": "kitchen", "supporting_ids": [1]},
+    ]}
+    adapter = BabiAdapter()
+    train = next(adapter.adapt([row], spec("babi", "en-valid-10k-qa1"), "train"))
+    test = next(adapter.adapt([row], spec("babi", "en-valid-10k-qa1"), "test"))
+    assert train.group_id == "train:s1" and test.group_id == "test:s1"
+    assert train.group_fingerprint != test.group_fingerprint
 
 
 def test_schema_and_invalid_gold_fail_closed() -> None:

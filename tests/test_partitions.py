@@ -12,7 +12,6 @@ from seer.corruptions import (
 from seer.evidence import TaskExample
 from seer.partitions import (
     GoldScorer,
-    PartitionError,
     assign_partitions,
     audit_and_deduplicate,
     build_partition_manifest,
@@ -59,8 +58,13 @@ def test_duplicate_collapse_conflict_quarantine_and_overlap_failure():
     assert not kept and len(quarantine) == 2 and len(audit.conflicts) == 1
     leaked = [replace(assigned[0], partition="signal_train"),
               replace(assigned[1], partition="confirmatory_test")]
-    with pytest.raises(PartitionError, match="overlap"):
-        audit_and_deduplicate(leaked)
+    kept, quarantine, audit = audit_and_deduplicate(leaked)
+    assert not kept and len(quarantine) == 2
+    fact = audit.cross_partition_duplicates[0]
+    assert fact.reason == "cross_partition_exact_duplicate"
+    assert fact.multiplicity == 2
+    assert fact.original_partitions == ("confirmatory_test", "signal_train")
+    assert not audit.content_overlaps
 
 
 def test_protected_generation_view_has_no_gold_and_scorer_is_scoped():

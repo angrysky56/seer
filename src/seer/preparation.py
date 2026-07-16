@@ -296,8 +296,15 @@ def prepare_data(
         for (domain, partition), records in sorted(shards.items()):
             atomic_write_bytes(temporary / "examples" / f"{domain}-{partition}.jsonl",
                                encode_jsonl(tuple(records)))
+        conflict_ids = {example_id for fact in audit.conflicts for example_id in fact.example_ids}
+        duplicate_ids = {example_id for fact in audit.cross_partition_duplicates
+                         for example_id in fact.example_ids}
         atomic_write_bytes(temporary / "quarantine" / "conflicting-gold.jsonl",
-                           encode_jsonl(quarantined))
+                           encode_jsonl(tuple(item for item in quarantined
+                                              if item.example_id in conflict_ids)))
+        atomic_write_bytes(temporary / "quarantine" / "cross-partition-duplicates.jsonl",
+                           encode_jsonl(tuple(item for item in quarantined
+                                              if item.example_id in duplicate_ids)))
         corruption_records = tuple(corruptions)
         atomic_write_bytes(temporary / "corruptions" / "fixtures.jsonl",
                            encode_corruptions(corruption_records))

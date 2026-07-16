@@ -90,6 +90,16 @@ class ConflictFact:
 
 
 @dataclass(frozen=True, slots=True)
+class CrossPartitionDuplicateFact:
+    content_fingerprint: str
+    example_ids: tuple[str, ...]
+    source_identities: tuple[str, ...]
+    original_partitions: tuple[str, ...]
+    multiplicity: int
+    reason: str = "cross_partition_exact_duplicate"
+
+
+@dataclass(frozen=True, slots=True)
 class LeakageAudit:
     schema_version: int
     duplicates: tuple[DuplicateFact, ...]
@@ -98,6 +108,7 @@ class LeakageAudit:
     group_overlaps: tuple[str, ...]
     duplicate_source_ids: tuple[str, ...]
     cross_domain_prompt_overlaps: tuple[str, ...]
+    cross_partition_duplicates: tuple[CrossPartitionDuplicateFact, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +140,14 @@ def audit_and_deduplicate(examples: Iterable[TaskExample]) -> tuple[
         by_prompt[_fingerprint(audit_normalize(item.prompt_text))].append(item)
     conflicts = {key: values for key, values in by_input.items()
                  if len({item.gold_normalized for item in values}) > 1}
-    quarantined_ids = {item.example_id for values in conflicts.values() for item in values}
+    cross_partition = {
+        key: values for key, values in by_content.items()
+        if len({item.partition for item in values}) > 1
+    }
+    quarantined_ids = {
+        item.example_id for values in (*conflicts.values(), *cross_partition.values())
+        for item in values
+    }
     duplicates: list[DuplicateFact] = []
     kept: list[TaskExample] = []
     for values in by_content.values():
@@ -147,9 +165,14 @@ def audit_and_deduplicate(examples: Iterable[TaskExample]) -> tuple[
             duplicates.append(DuplicateFact(winner.example_id,
                                              tuple(sorted(item.example_id for item in usable)),
                                              len(usable)))
-    content_overlaps = tuple(sorted(key for key, values in by_content.items()
+    kept_by_content: dict[str, list[TaskExample]] = defaultdict(list)
+    kept_by_group: dict[str, list[TaskExample]] = defaultdict(list)
+    for item in kept:
+        kept_by_content[item.content_fingerprint].append(item)
+        kept_by_group[item.group_fingerprint].append(item)
+    content_overlaps = tuple(sorted(key for key, values in kept_by_content.items()
                                     if len({item.partition for item in values}) > 1))
-    group_overlaps = tuple(sorted(key for key, values in by_group.items()
+    group_overlaps = tuple(sorted(key for key, values in kept_by_group.items()
                                   if len({item.partition for item in values}) > 1))
     audit = LeakageAudit(
         1, tuple(sorted(duplicates, key=lambda item: item.kept_example_id)),
@@ -158,6 +181,13 @@ def audit_and_deduplicate(examples: Iterable[TaskExample]) -> tuple[
         tuple(sorted("|".join(key) for key, values in by_source.items() if len(values) > 1)),
         tuple(sorted(key for key, values in by_prompt.items()
                      if len({item.domain for item in values}) > 1)),
+        tuple(CrossPartitionDuplicateFact(
+            key, tuple(sorted(item.example_id for item in values)),
+            tuple(sorted(
+                f"{item.dataset_id}|{item.dataset_config}|{item.source_split}|{item.source_row_id}"
+                for item in values)),
+            tuple(sorted({item.partition for item in values})), len(values),
+        ) for key, values in sorted(cross_partition.items())),
     )
     if content_overlaps or group_overlaps:
         raise PartitionError("protected partition content/group overlap")

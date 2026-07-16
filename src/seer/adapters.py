@@ -35,16 +35,17 @@ def _make(spec: DatasetSpec, split: str, row_id: str, group_id: str, payload: di
           metadata: dict[str, Any]) -> TaskExample:
     identity = dict(dataset_id=spec.repository_id, dataset_revision=spec.requested_revision,
                     dataset_config=spec.config_name, source_split=split, source_row_id=row_id)
+    qualified_group_id = f"{split}:{group_id}"
     return TaskExample(
         example_id=example_id(**identity), domain=spec.domain, dataset_id=spec.repository_id,
         dataset_revision=spec.requested_revision, dataset_config=spec.config_name,
-        source_split=split, source_row_id=row_id, group_id=group_id,
+        source_split=split, source_row_id=row_id, group_id=qualified_group_id,
         partition="signal_train", prompt_template_id=f"{spec.domain}-v1",
         prompt_payload={"system": SYSTEM_PROMPT, **payload}, prompt_text=prompt,
         gold_raw=gold, gold_normalized=normalized, answer_type=answer_type,
         adapter_metadata=metadata,
         content_fingerprint=_hash({"prompt": prompt, "gold": normalized}),
-        group_fingerprint=_hash(group_id), license_id=spec.expected_license,
+        group_fingerprint=_hash(qualified_group_id), license_id=spec.expected_license,
     )
 
 
