@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -301,6 +302,9 @@ def cache_outputs(prepared_root: str | Path, output_root: str | Path,
     generated = [item for item in existing_gens if isinstance(item, GenerationRecord)]
     failures = [item for item in existing_failures if isinstance(item, FailureRecord)]
     count = 0
+    started = time.perf_counter()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     protected = tuple(protected_generation_view(examples))
     if smoke_per_domain_regime:
         selected = []
@@ -324,11 +328,23 @@ def cache_outputs(prepared_root: str | Path, output_root: str | Path,
         count += 1
         if interrupt_after is not None and count >= interrupt_after:
             raise GenerationError("injected generation interruption")
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elapsed = time.perf_counter() - started
+    generated_tokens = sum(item.generated_token_count for item in generated)
     sealed = {path.relative_to(output).as_posix(): sha256_file(path)
               for path in (generations_path, failures_path, identity_path)}
     atomic_write_json(artifacts / "generation-index.json",
                       {"schema_version": 1, "generation_ids": sorted(
-                          item.generation_id for item in generated), "sealed_hashes": sealed})
+                          item.generation_id for item in generated), "sealed_hashes": sealed,
+                       "operational_metrics": {
+                           "elapsed_seconds": elapsed,
+                           "generated_tokens": generated_tokens,
+                           "generated_tokens_per_second": generated_tokens / elapsed,
+                           "peak_cuda_memory_bytes": (
+                               torch.cuda.max_memory_allocated()
+                               if torch.cuda.is_available() else None),
+                       }})
     # Only after the seal exists may the narrow capability reveal gold to the scorer.
     scorer = GoldScorer(examples)
     by_id = {item.example_id: item for item in examples}
