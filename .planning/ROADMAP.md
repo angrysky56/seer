@@ -19,6 +19,8 @@ frozen confirmatory run; correction is conditional on transfer success.
 
 ## Phase 1 — Reproducible Experiment Runtime
 
+**Status:** Complete (verified 2026-07-16)
+
 **Goal:** Any experiment arm can be configured, executed, resumed, audited, and
 reproduced without coupling the unit suite to network or model downloads.
 
@@ -67,6 +69,8 @@ Cross-cutting constraints:
   auditable across every plan.
 
 ## Phase 2 — Multi-Domain Evidence Data
+
+**Status:** Ready for planning
 
 **Goal:** Produce normalized, pinned, leakage-audited natural prediction records
 for bAbI, ProofWriter, and GSM8K under controlled Qwen3 generation regimes.

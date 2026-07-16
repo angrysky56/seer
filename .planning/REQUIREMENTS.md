@@ -38,18 +38,18 @@ before inspecting confirmatory test results.
 
 ### Experiment Foundation
 
-- [ ] **EXP-01** Provide a typed, serializable experiment configuration with all
+- [x] **EXP-01** Provide a typed, serializable experiment configuration with all
   model, dataset, split, seed, energy, optimizer, calibration, and output settings.
-- [ ] **EXP-02** Provide a CLI that can prepare data, cache base-model outputs,
+- [x] **EXP-02** Provide a CLI that can prepare data, cache base-model outputs,
   train one arm, evaluate one arm, run the declared matrix, and build a report.
-- [ ] **EXP-03** Write a manifest for every run containing config, git revision,
+- [x] **EXP-03** Write a manifest for every run containing config, git revision,
   dependency versions, hardware, input dataset revisions, checkpoint identifier,
   seeds, timestamps, and artifact hashes.
-- [ ] **EXP-04** Support deterministic resumption and do not overwrite a completed
+- [x] **EXP-04** Support deterministic resumption and do not overwrite a completed
   run unless the user explicitly requests replacement.
-- [ ] **EXP-05** Keep tests offline and lightweight; external weights/data are
+- [x] **EXP-05** Keep tests offline and lightweight; external weights/data are
   accessed only by explicit experiment commands, never by the unit suite.
-- [ ] **EXP-06** Require a Transformers version with Qwen3 support (>= 4.51),
+- [x] **EXP-06** Require a Transformers version with Qwen3 support (>= 4.51),
   verify the cached snapshot before a run, and fail with an actionable message
   rather than silently accessing the network when offline mode is requested.
 
@@ -151,7 +151,7 @@ before inspecting confirmatory test results.
 
 ### Documentation and Decision Record
 
-- [ ] **DOC-01** Document setup, explicit download commands, local smoke runs,
+- [x] **DOC-01** Document setup, explicit download commands, local smoke runs,
   confirmatory runs, resume behavior, and artifact interpretation.
 - [ ] **DOC-02** Generate a final decision record stating which gates passed,
   limitations, negative results, and the supported next branch.
@@ -162,11 +162,11 @@ before inspecting confirmatory test results.
 
 ## Quality Requirements
 
-- [ ] **QUAL-01** `uv run pytest` passes without network access.
-- [ ] **QUAL-02** `uv run ruff check .` passes.
+- [x] **QUAL-01** `uv run pytest` passes without network access.
+- [x] **QUAL-02** `uv run ruff check .` passes.
 - [ ] **QUAL-03** Core normalization, splitting, metrics, controls, resume logic,
   and gate calculations have deterministic unit tests, including failure cases.
-- [ ] **QUAL-04** A synthetic end-to-end experiment completes on CPU in CI and
+- [x] **QUAL-04** A synthetic end-to-end experiment completes on CPU in CI and
   emits the same artifact schema as a real run.
 - [ ] **QUAL-05** Invalid or incomplete experimental evidence fails closed with a
   clear diagnostic rather than producing a pass decision.
