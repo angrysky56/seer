@@ -33,6 +33,7 @@ class Invocation:
     babi_archive: Path | None = None
     babi_metadata: Path | None = None
     smoke_per_domain_regime: int | None = None
+    thinking_subset_per_domain: int | None = None
 
 
 Handler = Callable[[Invocation, ExperimentConfig], int]
@@ -52,6 +53,7 @@ class _InvocationParser(argparse.ArgumentParser):
             babi_archive=getattr(parsed, "babi_archive", None),
             babi_metadata=getattr(parsed, "babi_metadata", None),
             smoke_per_domain_regime=getattr(parsed, "smoke_per_domain_regime", None),
+            thinking_subset_per_domain=getattr(parsed, "thinking_subset_per_domain", None),
         )
 
 
@@ -72,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("--babi-metadata", type=Path)
         if command == "cache-outputs":
             child.add_argument("--smoke-per-domain-regime", type=int, choices=(1,))
+            child.add_argument("--thinking-subset-per-domain", type=int, choices=(256,))
     return parser
 
 
@@ -131,20 +134,26 @@ def main(
                 tokenizer_revision=config.model.revision or "",
             )
             smoke = invocation.smoke_per_domain_regime
+            thinking_subset = invocation.thinking_subset_per_domain
+            if smoke and thinking_subset:
+                raise ValueError("smoke and thinking-subset selectors are mutually exclusive")
             regimes = (
                 tuple(GenerationRegime.primary(domain)
                       for domain in ("gsm8k", "proofwriter", "babi"))
                 + (GenerationRegime.thinking(),)
-                if smoke else None)
+                if smoke else (GenerationRegime.thinking(),) if thinking_subset else None)
             cache_outputs(
                 config.output.root,
                 config.output.root / "generation-runs" /
-                (f"{config.output.run_name}-smoke" if smoke else config.output.run_name),
+                (f"{config.output.run_name}-smoke" if smoke else
+                 f"{config.output.run_name}-thinking-{thinking_subset}" if thinking_subset else
+                 config.output.run_name),
                 runner,
                 regimes=regimes,
                 resume=invocation.resume,
                 replace_existing=invocation.replace,
                 smoke_per_domain_regime=smoke,
+                thinking_subset_per_domain=thinking_subset,
             )
         except (GenerationError, OSError, RuntimeError, ValueError) as error:
             print(f"seer: cache-outputs failed: {error}", file=sys.stderr)

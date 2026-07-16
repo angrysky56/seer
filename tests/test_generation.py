@@ -11,6 +11,7 @@ from seer.generation import (
     GenerationRunner,
     PromptRegistry,
     cache_outputs,
+    select_thinking_subset,
 )
 from seer.partitions import ProtectedExample
 from seer.runtime import atomic_write_bytes, atomic_write_json, sha256_file
@@ -197,6 +198,17 @@ def test_smoke_selector_emits_exactly_one_example_per_domain_regime(tmp_path):
         for regime in ("non_thinking", "thinking")}
     assert sorted(item.max_new_tokens for item in records if item.regime == "non_thinking") == [
         48, 96, 256]
+
+
+def test_thinking_subset_is_hash_ranked_bounded_and_order_independent():
+    items = tuple(protected(domain) for domain in ("gsm8k", "proofwriter", "babi")
+                  for _ in range(2))
+    items = tuple(replace(item, example_id=f"{index + 1:064x}")
+                  for index, item in enumerate(items))
+    first = select_thinking_subset(items, 1)
+    second = select_thinking_subset(tuple(reversed(items)), 1)
+    assert [item.example_id for item in first] == [item.example_id for item in second]
+    assert len(first) == 3 and {item.domain for item in first} == {"gsm8k", "proofwriter", "babi"}
 
 
 def test_resume_is_duplicate_free_and_matches_clean_generation(tmp_path):

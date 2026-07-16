@@ -113,6 +113,17 @@ def thinking_subset(example_id: str, *, limit_fraction: int = 256) -> bool:
     return int(example_id[:8], 16) % limit_fraction == 0
 
 
+def select_thinking_subset(examples: tuple[ProtectedExample, ...], per_domain: int = 256
+                           ) -> tuple[ProtectedExample, ...]:
+    selected = []
+    for domain in ("gsm8k", "proofwriter", "babi"):
+        candidates = sorted(
+            (item for item in examples if item.domain == domain),
+            key=lambda item: hashlib.sha256(item.example_id.encode()).hexdigest())
+        selected.extend(candidates[:per_domain])
+    return tuple(selected)
+
+
 def _hash(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
@@ -272,7 +283,7 @@ def _prepared_examples(root: Path) -> tuple[TaskExample, ...]:
 
 
 def _identity(prepared_root: Path, runner: GenerationRunner,
-              regimes: tuple[GenerationRegime, ...]) -> dict[str, Any]:
+              regimes: tuple[GenerationRegime, ...], selection: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "prepared_complete_sha256": sha256_file(prepared_root / "COMPLETE"),
@@ -283,6 +294,7 @@ def _identity(prepared_root: Path, runner: GenerationRunner,
         "tokenizer_revision": runner.tokenizer_revision,
         "chat_template_sha256": _hash(runner.tokenizer.chat_template),
         "regimes": [item.parameters() for item in regimes],
+        "selection": selection,
     }
 
 
@@ -290,15 +302,23 @@ def cache_outputs(prepared_root: str | Path, output_root: str | Path,
                   runner: GenerationRunner, *, regimes: tuple[GenerationRegime, ...] | None = None,
                   resume: bool = False, replace_existing: bool = False,
                   interrupt_after: int | None = None,
-                  smoke_per_domain_regime: int | None = None) -> Path:
+                  smoke_per_domain_regime: int | None = None,
+                  thinking_subset_per_domain: int | None = None) -> Path:
     """Generate label-blind shards, seal them, then open gold solely for scoring."""
     prepared, output = Path(prepared_root), Path(output_root)
     examples = _prepared_examples(prepared)
     if smoke_per_domain_regime not in (None, 1):
         raise GenerationError("smoke selector is bounded to exactly one example")
+    if thinking_subset_per_domain not in (None, 256):
+        raise GenerationError("thinking subset is fixed at 256 examples per domain")
+    if smoke_per_domain_regime and thinking_subset_per_domain:
+        raise GenerationError("smoke and thinking selectors are mutually exclusive")
     regimes = regimes or tuple(
         GenerationRegime.primary(domain) for domain in ("gsm8k", "proofwriter", "babi"))
-    identity = _identity(prepared, runner, regimes)
+    selection = {"mode": "smoke", "per_domain_regime": 1} if smoke_per_domain_regime else (
+        {"mode": "thinking_hash_rank_v1", "per_domain": thinking_subset_per_domain}
+        if thinking_subset_per_domain else {"mode": "full_primary"})
+    identity = _identity(prepared, runner, regimes, selection)
     if output.exists() and replace_existing:
         import shutil
         shutil.rmtree(output)
@@ -342,6 +362,9 @@ def cache_outputs(prepared_root: str | Path, output_root: str | Path,
                              if item.domain == domain and item.partition == "confirmatory_test")
             selected.extend(((candidate, GenerationRegime.primary(domain)),
                              (candidate, GenerationRegime.thinking())))
+    elif thinking_subset_per_domain:
+        selected = [(item, GenerationRegime.thinking()) for item in
+                    select_thinking_subset(protected, thinking_subset_per_domain)]
     else:
         selected = [(item, GenerationRegime.primary(item.domain)) for item in protected]
     for item, regime in selected:

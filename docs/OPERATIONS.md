@@ -176,3 +176,34 @@ correct and 100 naturally incorrect scored confirmatory primary generations per 
 group. `underpowered` is a valid result and must not be repaired by resampling, retries,
 regime/corruption merging, task expansion, or changed token budgets. Signal fitting is
 prohibited until the real report and immutable generation index have been reviewed.
+
+## Colab A100 handoff
+
+Use [`notebooks/phase2_a100_generation.ipynb`](../notebooks/phase2_a100_generation.ipynb)
+for an A100-backed run. It mounts Google Drive, validates the GPU, supports a configured
+clone/branch or existing uploaded repository, installs the frozen environment, and
+delegates to `scripts/colab_phase2_generation.py`. Network and expensive toggles default
+to false.
+
+Copy the complete `phase02-prepared-v2` tree to Drive unchanged. The launcher validates
+`COMPLETE`, every manifest hash, and zero residual leakage before model work. Enable
+model acquisition alone first; then disable it so generation runs with Hugging Face and
+Transformers offline settings.
+
+Primary and thinking evidence use separate resumable commands and output identities:
+
+```bash
+python scripts/colab_phase2_generation.py --repo-dir /content/seer \
+  --prepared-root /content/drive/MyDrive/seer/phase02-prepared-v2 --run-primary
+python scripts/colab_phase2_generation.py --repo-dir /content/seer \
+  --prepared-root /content/drive/MyDrive/seer/phase02-prepared-v2 --run-thinking
+```
+
+Thinking selection is hash-ranked and fixed at at most 256 examples per domain; it cannot
+merge with primary evidence. Completed reruns validate seals. Reserve at least 5 GiB in
+Drive. Plan roughly 3–10 A100 hours for primary and 1–3 hours for thinking; each immutable
+index records actual elapsed time, throughput, and peak CUDA allocation.
+
+Archive generation directories only after `COMPLETE`. For transfer, manifests,
+identities, indexes, scores, failures, and reports are normally sufficient; prepared raw
+rows and ProofWriter content remain local/Drive-only.
