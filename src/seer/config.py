@@ -39,6 +39,29 @@ class DatasetConfig:
 
 
 @dataclass(slots=True)
+class DatasetSpec:
+    domain: Literal["gsm8k", "proofwriter", "babi"]
+    repository_id: str
+    config_name: str
+    requested_revision: str
+    splits: list[str]
+    expected_license: str
+    expected_counts: dict[str, int]
+    sample_caps: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class GenerationRegimeConfig:
+    name: Literal["non_thinking", "thinking"]
+    thinking_enabled: bool
+    do_sample: bool
+    max_new_tokens: dict[str, int]
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+
+
+@dataclass(slots=True)
 class SeedConfig:
     training: list[int]
     generation: int
@@ -115,6 +138,8 @@ class ExperimentConfig:
     eval: EvalConfig | None = None
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    datasets: list[DatasetSpec] = field(default_factory=list)
+    generation_regimes: list[GenerationRegimeConfig] = field(default_factory=list)
 
 
 def _decode(value: Any, annotation: Any, path: str) -> Any:
@@ -194,6 +219,14 @@ def _validate(config: ExperimentConfig) -> None:
     for valid, path, message in checks:
         if not valid:
             raise ConfigError(f"{path}: {message}")
+    for index, spec in enumerate(config.datasets):
+        prefix = f"datasets[{index}]"
+        if not spec.repository_id or not spec.config_name:
+            raise ConfigError(f"{prefix}: repository_id and config_name must not be empty")
+        if not spec.requested_revision or spec.requested_revision in {"main", "master"}:
+            raise ConfigError(f"{prefix}.requested_revision: must be a pinned revision")
+        if len(set(spec.splits)) != len(spec.splits) or not spec.splits:
+            raise ConfigError(f"{prefix}.splits: must be non-empty and unique")
 
 
 def config_from_dict(data: dict[str, Any]) -> ExperimentConfig:
@@ -216,7 +249,13 @@ def config_to_dict(config: ExperimentConfig) -> dict[str, Any]:
             return {key: normalize(item) for key, item in value.items()}
         return value
 
-    return normalize(asdict(config))
+    result = normalize(asdict(config))
+    # Preserve the exact v1 synthetic wire representation while allowing real-data extensions.
+    if not result["datasets"]:
+        result.pop("datasets")
+    if not result["generation_regimes"]:
+        result.pop("generation_regimes")
+    return result
 
 
 def canonical_config_json(config: ExperimentConfig) -> str:
