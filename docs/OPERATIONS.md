@@ -132,3 +132,47 @@ huggingface-cli download Qwen/Qwen3-0.6B --revision c1899de289a04d12100db370d814
 
 Review storage, network, and model-license implications before running it. Never make
 the cached forward check or download command a unit-test/CI dependency.
+
+## Real evidence preparation and output caching
+
+Preparation is the only dataset network boundary. Use a fresh root and provide both
+hash-locked local bAbI inputs together:
+
+```bash
+uv run seer prepare-data --config examples/evidence.json \
+  --output-root artifacts/phase02-prepared-v2 --allow-download \
+  --babi-archive /home/ty/Downloads/archive.zip \
+  --babi-metadata /home/ty/Downloads/the-babi-tasks-for-nlp-qa-system-metadata.json
+```
+
+The local paths are operator inputs, not evidence identities. `dataset-lock.json`
+records the Kaggle version and metadata/repack hashes, the pinned bAbI builder hash,
+the distinct upstream-declared tarball hash, and each selected member hash/count.
+The parser uses `zipfile`; it rejects traversal, duplicate members, malformed lines,
+bad supporting IDs, and any hash/count/license mismatch. Raw ProofWriter rows and the
+prepared corpus remain local-only.
+
+Before generation, require `COMPLETE`, validate every `manifest.json` artifact, inspect
+`dataset-lock.json`, `partition-manifest.json`, `leakage-audit.json`, and both quarantine
+shards, and require zero residual content/group overlap. Cross-partition exact duplicates
+are quarantined in full; no member is reassigned or selected as a winner.
+
+The model-output boundary is offline and uses the exact cached Qwen revision:
+
+```bash
+uv run seer cache-outputs --config examples/evidence.json \
+  --output-root artifacts/phase02-prepared-v2 --offline
+```
+
+Use `--resume` only for an interrupted run and `--replace` only after deliberate review.
+Generation consumes prompt/ID-only views, seals generation shards and their identity
+index first, and opens gold labels only for separate scoring. A changed data lock, audit,
+model/tokenizer revision, chat template, prompt tokenization, regime, budget, or sealed
+artifact fails closed. Primary non-thinking outputs are greedy and capped per domain;
+thinking outputs are a separate seeded subset capped at 1,024 new tokens.
+
+Interpret `sufficiency-report.json` literally. Eligibility requires at least 100 naturally
+correct and 100 naturally incorrect scored confirmatory primary generations per reported
+group. `underpowered` is a valid result and must not be repaired by resampling, retries,
+regime/corruption merging, task expansion, or changed token budgets. Signal fitting is
+prohibited until the real report and immutable generation index have been reviewed.

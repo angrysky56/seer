@@ -76,6 +76,12 @@ The command is safe to repeat: validated completed evidence is an immutable no-o
 See [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for offline verification, resume and
 replacement policies, explicit cache/download operations, and artifact meanings.
 
+Real evidence preparation is opt-in and pin-locked. The approved bAbI v1.2 source is a
+locally supplied Kaggle repack whose outer archive, metadata, license, README, selected
+members, and counts are independently hashed; it is never represented as the original
+upstream tarball and does not execute dataset-loader code. See the operations guide for
+the exact command and review gates.
+
 ## Papers this builds on
 
 **State / prediction separation & efficiency**
