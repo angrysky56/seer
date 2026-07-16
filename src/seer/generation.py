@@ -296,7 +296,8 @@ def cache_outputs(prepared_root: str | Path, output_root: str | Path,
     examples = _prepared_examples(prepared)
     if smoke_per_domain_regime not in (None, 1):
         raise GenerationError("smoke selector is bounded to exactly one example")
-    regimes = regimes or (GenerationRegime.primary("gsm8k"),)
+    regimes = regimes or tuple(
+        GenerationRegime.primary(domain) for domain in ("gsm8k", "proofwriter", "babi"))
     identity = _identity(prepared, runner, regimes)
     if output.exists() and replace_existing:
         import shutil
