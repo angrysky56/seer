@@ -29,6 +29,7 @@ class Invocation:
     resume: bool
     replace: bool
     offline: bool
+    allow_download: bool = False
 
 
 Handler = Callable[[Invocation, ExperimentConfig], int]
@@ -44,6 +45,7 @@ class _InvocationParser(argparse.ArgumentParser):
             resume=parsed.resume,
             replace=parsed.replace,
             offline=parsed.offline,
+            allow_download=getattr(parsed, "allow_download", False),
         )
 
 
@@ -58,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
         policy.add_argument("--resume", action="store_true")
         policy.add_argument("--replace", action="store_true")
         child.add_argument("--offline", action="store_true")
+        if command == "prepare-data":
+            child.add_argument("--allow-download", action="store_true")
     return parser
 
 
@@ -87,6 +91,16 @@ def main(
     handler = (handlers or {}).get(invocation.command)
     if handler is not None:
         return handler(invocation, config)
+    if invocation.command == "prepare-data":
+        from seer.preparation import PreparationError, stage_dataset_sources
+
+        try:
+            stage_dataset_sources(config.datasets, config.output.root,
+                                  allow_download=invocation.allow_download)
+        except (OSError, PreparationError, ValueError) as error:
+            print(f"seer: prepare-data failed: {error}", file=sys.stderr)
+            return 2
+        return 0
     if invocation.command == "smoke":
         from seer.smoke import run_smoke
 

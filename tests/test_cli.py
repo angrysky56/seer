@@ -27,6 +27,7 @@ def test_parser_produces_typed_auditable_invocation() -> None:
         resume=False,
         replace=False,
         offline=True,
+        allow_download=False,
     )
 
 
@@ -57,3 +58,12 @@ def test_injected_smoke_handler_receives_config_without_model_construction() -> 
 def test_deferred_command_fails_honestly_without_external_imports(capsys) -> None:
     assert main(["train", "--config", str(EXAMPLE)]) == 2
     assert "not yet implemented" in capsys.readouterr().err
+
+
+def test_prepare_download_consent_is_scoped_to_prepare_command() -> None:
+    invocation = build_parser().parse_args(
+        ["prepare-data", "--config", str(EXAMPLE), "--allow-download"]
+    )
+    assert invocation.allow_download is True
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["train", "--config", str(EXAMPLE), "--allow-download"])

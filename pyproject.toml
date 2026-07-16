@@ -8,6 +8,7 @@ dependencies = [
     "transformers>=4.51",
     "numpy>=2.0",
     "scikit-learn>=1.4",
+    "datasets>=3.2,<4",
 ]
 
 [project.scripts]
