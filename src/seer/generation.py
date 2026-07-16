@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
+
+import torch
 
 from seer.cache import QWEN3_REPOSITORY, QWEN3_REVISION, resolve_cached_snapshot
 from seer.evidence import (
@@ -137,11 +138,11 @@ class GenerationRunner:
         prompt = PromptRegistry().build(example)
         ids = self.tokenizer.apply_chat_template(
             list(prompt.messages), tokenize=True, add_generation_prompt=True,
-            enable_thinking=regime.thinking_enabled,
+            enable_thinking=regime.thinking_enabled, return_tensors="pt",
         )
         nested_ids = (hasattr(ids, "ndim") and ids.ndim > 1) or (
             len(ids) and isinstance(ids[0], (list, tuple)))
-        prompt_ids = list(ids[0] if nested_ids else ids)
+        prompt_ids = [int(item) for item in (ids[0] if nested_ids else ids)]
         seed = stable_seed(example.example_id, base_seed, regime.name)
         params = regime.parameters()
         gid = generation_id(example_id=example.example_id, model_id=self.model_id,
@@ -154,20 +155,24 @@ class GenerationRunner:
                 _failure_id("prompt", "prompt_over_budget", example.example_id, gid), "prompt",
                 "prompt_over_budget", "prompt plus generation budget exceeds context", False,
                 example.example_id, gid, {"prompt_tokens": len(prompt_ids),
-                                         "max_new_tokens": regime.max_new_tokens},
+                                         "max_new_tokens": regime.max_new_tokens,
+                                         "regime": regime.name},
             )
             return None, failure
         kwargs = {"max_new_tokens": regime.max_new_tokens, "do_sample": regime.do_sample,
                   "num_return_sequences": 1}
         if regime.do_sample:
+            generator_device = self.device if self.device != "cuda" or torch.cuda.is_available() \
+                else "cpu"
             kwargs.update(temperature=regime.temperature, top_p=regime.top_p,
                           top_k=regime.top_k, min_p=regime.min_p,
-                          generator=random.Random(seed))
+                          generator=torch.Generator(device=generator_device).manual_seed(seed))
         try:
-            output = self.model.generate(ids, **kwargs)
+            model_ids = ids.to(self.device) if hasattr(ids, "to") else ids
+            output = self.model.generate(model_ids, **kwargs)
             nested_output = (hasattr(output, "ndim") and output.ndim > 1) or (
                 len(output) and isinstance(output[0], (list, tuple)))
-            sequence = list(output[0] if nested_output else output)
+            sequence = [int(item) for item in (output[0] if nested_output else output)]
             generated = sequence[len(prompt_ids):]
             raw = self.tokenizer.decode(generated, skip_special_tokens=False)
         except Exception as error:
@@ -209,7 +214,11 @@ def load_cached_qwen(*, cache_dir: str | None = None) -> tuple[Any, Any]:
     snapshot = resolve_cached_snapshot(QWEN3_REPOSITORY, QWEN3_REVISION, cache_dir=cache_dir)
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(snapshot.snapshot_path, local_files_only=True)
-    model = AutoModelForCausalLM.from_pretrained(snapshot.snapshot_path, local_files_only=True)
+    if not torch.cuda.is_available():
+        raise GenerationError("cached-Qwen GPU operation requires CUDA")
+    model = AutoModelForCausalLM.from_pretrained(
+        snapshot.snapshot_path, local_files_only=True, dtype=torch.bfloat16).to("cuda")
+    model.eval()
     return tokenizer, model
 
 
@@ -246,12 +255,14 @@ def _identity(prepared_root: Path, runner: GenerationRunner,
 def cache_outputs(prepared_root: str | Path, output_root: str | Path,
                   runner: GenerationRunner, *, regimes: tuple[GenerationRegime, ...] | None = None,
                   resume: bool = False, replace_existing: bool = False,
-                  interrupt_after: int | None = None) -> Path:
+                  interrupt_after: int | None = None,
+                  smoke_per_domain_regime: int | None = None) -> Path:
     """Generate label-blind shards, seal them, then open gold solely for scoring."""
     prepared, output = Path(prepared_root), Path(output_root)
     examples = _prepared_examples(prepared)
-    regimes = regimes or tuple(GenerationRegime.primary(domain)
-                               for domain in ("gsm8k", "proofwriter", "babi"))
+    if smoke_per_domain_regime not in (None, 1):
+        raise GenerationError("smoke selector is bounded to exactly one example")
+    regimes = regimes or (GenerationRegime.primary("gsm8k"),)
     identity = _identity(prepared, runner, regimes)
     if output.exists() and replace_existing:
         import shutil
@@ -278,16 +289,27 @@ def cache_outputs(prepared_root: str | Path, output_root: str | Path,
         list(decode_jsonl(generations_path.read_bytes())) if generations_path.exists() else [])
     existing_failures = (
         list(decode_jsonl(failures_path.read_bytes())) if failures_path.exists() else [])
-    done = {item.example_id for item in existing_gens if isinstance(item, GenerationRecord)} | {
-        item.example_id for item in existing_failures if isinstance(item, FailureRecord)}
+    done = {(item.example_id, item.regime) for item in existing_gens
+            if isinstance(item, GenerationRecord)} | {
+        (item.example_id, str(item.context.get("regime", "non_thinking")))
+        for item in existing_failures if isinstance(item, FailureRecord)}
     generated = [item for item in existing_gens if isinstance(item, GenerationRecord)]
     failures = [item for item in existing_failures if isinstance(item, FailureRecord)]
     count = 0
-    regime_by_domain = {"gsm8k": regimes[0], "proofwriter": regimes[1], "babi": regimes[2]}
-    for item in protected_generation_view(examples):
-        if item.example_id in done:
+    protected = tuple(protected_generation_view(examples))
+    if smoke_per_domain_regime:
+        selected = []
+        for domain in ("gsm8k", "proofwriter", "babi"):
+            candidate = next(item for item in protected
+                             if item.domain == domain and item.partition == "confirmatory_test")
+            selected.extend(((candidate, GenerationRegime.primary(domain)),
+                             (candidate, GenerationRegime.thinking())))
+    else:
+        selected = [(item, GenerationRegime.primary(item.domain)) for item in protected]
+    for item, regime in selected:
+        if (item.example_id, regime.name) in done:
             continue
-        record, failure = runner.run(item, regime_by_domain[item.domain])
+        record, failure = runner.run(item, regime)
         if record is not None:
             generated.append(record)
         if failure is not None:

@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from seer.evidence import ScoredResult, TaskExample, encode_jsonl
+from seer.evidence import GenerationRecord, ScoredResult, TaskExample, decode_jsonl, encode_jsonl
 from seer.generation import (
     GenerationError,
     GenerationRegime,
@@ -60,7 +60,7 @@ def test_prompt_registry_and_primary_regime_contract(domain):
                                                               GenerationRegime.primary(domain))
     assert failure is None and record is not None
     assert tokenizer.calls[0][1] == {"tokenize": True, "add_generation_prompt": True,
-                                     "enable_thinking": False}
+                                     "enable_thinking": False, "return_tensors": "pt"}
     assert record.prompt_token_count == 3 and record.generated_token_count == 2
     assert record.finish_reason == "eos" and not record.truncated
     assert len(record.chat_template_hash) == len(record.prompt_token_ids_hash) == 64
@@ -130,15 +130,17 @@ def test_sufficiency_excludes_invalid_and_ambiguous_rows():
     assert (group.correct, group.incorrect, group.invalid_source, group.ambiguous) == (0, 0, 1, 1)
 
 
-def prepared_root(tmp_path, count=3):
+def prepared_root(tmp_path, count=3, domains=None):
     root = tmp_path / "prepared"
     examples = []
     for index in range(count):
+        domain = domains[index] if domains else "proofwriter"
+        gold = {"proofwriter": "true", "gsm8k": "1", "babi": "hall"}[domain]
         eid = f"{index + 1:064x}"
         examples.append(TaskExample(
-            eid, "proofwriter", "tasksource/proofwriter", "7" * 40, "default", "test",
-            str(index), str(index), "confirmatory_test", "proofwriter-v1",
-            {"system": "Solve exactly."}, "Question?", "true", "true", "categorical", {},
+            eid, domain, f"source/{domain}", "7" * 40, "default", "test",
+            str(index), str(index), "confirmatory_test", f"{domain}-v1",
+            {"system": "Solve exactly."}, "Question?", gold, gold, "categorical", {},
             "b" * 64, "c" * 64, "unknown/not-declared"))
     path = root / "examples" / "proofwriter-confirmatory_test.jsonl"
     atomic_write_bytes(path, encode_jsonl(tuple(examples)))
@@ -153,6 +155,25 @@ def prepared_root(tmp_path, count=3):
     atomic_write_json(root / "manifest.json", {"artifacts": artifacts})
     atomic_write_bytes(root / "COMPLETE", b"complete\n")
     return root
+
+
+def test_smoke_selector_emits_exactly_one_example_per_domain_regime(tmp_path):
+    prepared = prepared_root(tmp_path, domains=["gsm8k", "proofwriter", "babi"])
+    output = tmp_path / "smoke"
+    regimes = tuple(GenerationRegime.primary(domain)
+                    for domain in ("gsm8k", "proofwriter", "babi")) + (
+                        GenerationRegime.thinking(),)
+    cache_outputs(prepared, output, GenerationRunner(FakeTokenizer(), FakeGenerator()),
+                  regimes=regimes, smoke_per_domain_regime=1)
+    records = [item for item in decode_jsonl(
+        (output / "artifacts/generations.jsonl").read_bytes())
+        if isinstance(item, GenerationRecord)]
+    assert len(records) == 6
+    assert {(item.example_id, item.regime) for item in records} == {
+        (f"{index:064x}", regime) for index in (1, 2, 3)
+        for regime in ("non_thinking", "thinking")}
+    assert sorted(item.max_new_tokens for item in records if item.regime == "non_thinking") == [
+        48, 96, 256]
 
 
 def test_resume_is_duplicate_free_and_matches_clean_generation(tmp_path):
