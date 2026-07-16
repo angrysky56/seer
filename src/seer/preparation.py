@@ -313,7 +313,11 @@ class HuggingFaceDatasetBackend:
         self._datasets[(spec.repository_id, spec.config_name, commit)] = loaded
         files = tuple(DatasetSourceFile(item.rfilename, item.lfs.sha256)
                       for item in (info.siblings or []) if item.lfs and item.lfs.sha256)
-        splits = {name: int(value.num_examples) for name, value in config_info.splits.items()}
+        splits = {
+            name: int(value["num_examples"] if isinstance(value, Mapping)
+                      else value.num_examples)
+            for name, value in config_info.splits.items()
+        }
         features = config_info.features.to_dict()
         fingerprint = "|".join(str(loaded[name]._fingerprint) for name in sorted(loaded))
         return ResolvedDataset(spec.repository_id, spec.requested_revision, commit,

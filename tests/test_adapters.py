@@ -7,12 +7,37 @@ from seer.adapters import AdapterError, BabiAdapter, Gsm8kAdapter, ProofWriterAd
 from seer.config import DatasetSpec, load_config
 from seer.preparation import (
     DatasetSourceFile,
+    HuggingFaceDatasetBackend,
     PreparationError,
     ResolvedDataset,
     load_and_verify_staging,
     prepare_data,
     stage_dataset_sources,
 )
+
+
+def test_dataset_backend_accepts_mapping_shaped_split_metadata(monkeypatch):
+    """Datasets 3.6 exposes config-info split facts as plain mappings."""
+    class Info:
+        sha = "a" * 40
+        siblings = []
+
+    class ConfigInfo:
+        splits = {"train": {"num_examples": 2}, "test": {"num_examples": 1}}
+        features = type("Features", (), {"to_dict": lambda self: {"question": "string"}})()
+        builder_name = "parquet"
+
+    loaded = {
+        "train": type("Split", (), {"_fingerprint": "train-fp"})(),
+        "test": type("Split", (), {"_fingerprint": "test-fp"})(),
+    }
+    monkeypatch.setattr("huggingface_hub.HfApi.dataset_info", lambda *args, **kwargs: Info())
+    monkeypatch.setattr("datasets.get_dataset_config_info", lambda *args, **kwargs: ConfigInfo())
+    monkeypatch.setattr("datasets.load_dataset", lambda *args, **kwargs: loaded)
+    spec = DatasetSpec("gsm8k", "openai/gsm8k", "main", "a" * 40,
+                       ["train", "test"], "MIT", {"train": 2, "test": 1})
+    resolved = HuggingFaceDatasetBackend().resolve(spec)
+    assert resolved.splits == {"train": 2, "test": 1}
 
 
 def spec(domain: str, config: str = "main") -> DatasetSpec:
