@@ -95,6 +95,37 @@ for bAbI, ProofWriter, and GSM8K under controlled Qwen3 generation regimes.
    natural predictions, or is explicitly marked underpowered before signal fitting.
 4. Every generation is traceable to prompt, regime, parameters, and token budget.
 
+### Plans
+
+**Wave 1**
+
+- `02-01-PLAN.md` — strict evidence schemas, codecs, failure taxonomy, and domain normalizers.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- `02-02-PLAN.md` — pinned source adapters, explicit opt-in staging, and dataset lock.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- `02-03-PLAN.md` — protected partitions, duplicate/leakage audit, corruption
+  isolation, and transactional prepared-corpus publication.
+
+**Wave 4** *(blocked on Waves 2–3 completion)*
+
+- `02-04-PLAN.md` — sealed Qwen generation, scoped scoring, natural class
+  sufficiency, operations documentation, and real-evidence checkpoints.
+
+Cross-cutting constraints:
+
+- Dataset and model network access is explicit opt-in; tests and post-preparation
+  generation remain offline and pinned to immutable revisions.
+- Confirmatory generation receives prompt/ID-only views; gold becomes available
+  only to a scoped scorer after generation shards are sealed.
+- Pin, schema, split, count, license, audit, or artifact mismatches fail closed and
+  cannot count as Phase 2 completion.
+- `eligible` and honestly `underpowered` are valid sufficiency outcomes; adaptive
+  resampling, regime pooling, or task expansion cannot repair class balance.
+
 ## Phase 3 — Concept Signals
 
 **Goal:** Implement energy-family signals on a shared concept representation and

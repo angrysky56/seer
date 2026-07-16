@@ -10,10 +10,11 @@
 ## Current Position
 
 - **Phase:** 2 of 7 — Multi-Domain Evidence Data
-- **Status:** Ready for planning
+- **Status:** Ready to execute
 - **Progress:** 10/47 milestone requirements complete
 - **Completed phase:** Phase 1 — 4/4 plans, verification passed
-- **Next command:** `/gsd-plan-phase 2`
+- **Plans:** 4 plans across 4 waves
+- **Next command:** `/gsd-execute-phase 2`
 
 ## Milestone Goal
 
@@ -57,13 +58,13 @@ test whether it can safely guide concept-space correction.
 
 ## Session Continuity
 
-Phase 1 is complete and independently verified. The reproducible runtime, exact
-offline Qwen3 boundary, deterministic smoke experiment, transactional artifacts,
-and operations guide are ready for Phase 2's real-domain data work. Confirmatory
-model runs remain assigned to later phases.
+Phase 1 is complete and independently verified. Phase 2 research, Nyquist
+validation, and four execution plans are complete and independently checked.
+Execution must pause for explicit dataset-download and real-corpus evidence
+checkpoints; confirmatory signal fitting remains assigned to later phases.
 
 ## Last Activity
 
 - **Date:** 2026-07-15
-- **Action:** Completed Phase 1 — Reproducible Experiment Runtime
-- **Result:** 4/4 plans complete; 4/4 success criteria and 10/10 requirements verified
+- **Action:** Planned Phase 2 — Multi-Domain Evidence Data
+- **Result:** 4 plans, 4 waves, verification passed after two targeted revision rounds

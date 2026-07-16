@@ -3,7 +3,7 @@ phase: 2
 slug: multi-domain-evidence-data
 status: draft
 nyquist_compliant: true
-wave_0_complete: true
+wave_0_complete: false
 created: 2026-07-15
 ---
 
@@ -35,13 +35,16 @@ created: 2026-07-15
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
 | 02-01-01 | 01 | 1 | DATA-01 | — | Strict records reject unknown or malformed evidence | unit | `uv run pytest tests/test_evidence.py -q` | ❌ W0 | ⬜ pending |
-| 02-01-02 | 01 | 1 | DATA-03 | — | Ambiguous/invalid outputs remain explicit instead of guessed | unit | `uv run pytest tests/test_normalization.py -q` | ❌ W0 | ⬜ pending |
-| 02-02-01 | 02 | 2 | DATA-02 | — | Dataset resolution is pinned and opt-in; tests never download | unit/integration | `uv run pytest tests/test_adapters.py -q` | ❌ W0 | ⬜ pending |
-| 02-02-02 | 02 | 2 | DATA-02 | — | Prepared shards preserve official identity and validate hashes | integration | `uv run pytest tests/test_adapters.py -q -k 'prepare or lock or split'` | ❌ W0 | ⬜ pending |
-| 02-03-01 | 03 | 2 | DATA-04 | — | Protected groups cannot cross partitions | unit | `uv run pytest tests/test_partitions.py -q -k 'partition or overlap or duplicate'` | ❌ W0 | ⬜ pending |
-| 02-03-02 | 03 | 2 | DATA-06 | — | Corruptions cannot enter primary natural-result iterators | unit | `uv run pytest tests/test_partitions.py -q -k 'corruption or natural'` | ❌ W0 | ⬜ pending |
-| 02-04-01 | 04 | 3 | DATA-07 | — | Regime, seed, template, and token budgets are immutable and traceable | unit/integration | `uv run pytest tests/test_generation.py -q -k 'prompt or regime or budget'` | ❌ W0 | ⬜ pending |
-| 02-04-02 | 04 | 3 | DATA-05, DATA-07 | — | Resume is duplicate-free and insufficiency fails closed | integration | `uv run pytest tests/test_generation.py -q -k 'resume or sufficiency or natural'` | ❌ W0 | ⬜ pending |
+| 02-01-02 | 01 | 1 | DATA-03 | — | Ambiguous/invalid outputs remain explicit instead of guessed | unit | `uv run pytest tests/test_normalization.py tests/test_evidence.py -q` | ❌ W0 | ⬜ pending |
+| 02-02-01 | 02 | 2 | DATA-02 | — | Dataset resolution is pinned and opt-in; tests never download | unit/integration | `uv run pytest tests/test_adapters.py tests/test_config.py tests/test_cli.py -q -k 'not prepare'` | ❌ W0 | ⬜ pending |
+| 02-02-02 | 02 | 2 | DATA-02 | — | Source staging preserves official identity but cannot publish unaudited completion | integration | `uv run pytest tests/test_adapters.py tests/test_cli.py tests/test_config.py -q -k 'prepare or lock or split or download'` | ❌ W0 | ⬜ pending |
+| 02-03-01 | 03 | 3 | DATA-04 | — | Protected groups cannot cross partitions | unit | `uv run pytest tests/test_partitions.py -q -k 'partition or overlap or duplicate or protected'` | ❌ W0 | ⬜ pending |
+| 02-03-02 | 03 | 3 | DATA-06 | — | Corruptions cannot enter primary natural-result iterators | unit | `uv run pytest tests/test_partitions.py -q -k 'corruption or natural'` | ❌ W0 | ⬜ pending |
+| 02-03-03 | 03 | 3 | DATA-02, DATA-04, DATA-06 | — | Preparation publishes only after partition, quarantine, leakage, and corruption checks | integration | `uv run pytest tests/test_adapters.py tests/test_partitions.py tests/test_cli.py -q -k 'prepare_data or publication or complete or quarantine or overlap or corruption'` | ❌ W0 | ⬜ pending |
+| 02-04-01 | 04 | 4 | DATA-07 | — | Regime, seed, template, and token budgets are immutable and traceable | unit/integration | `uv run pytest tests/test_generation.py -q -k 'prompt or regime or budget or token or thinking'` | ❌ W0 | ⬜ pending |
+| 02-04-02 | 04 | 4 | DATA-05, DATA-07 | — | Generation is sealed before scoped scoring; resume and insufficiency fail closed | integration | `uv run pytest tests/test_generation.py -q -k 'resume or sufficiency or natural or tamper'` | ❌ W0 | ⬜ pending |
+| 02-04-03 | 04 | 4 | DATA-02, DATA-04, DATA-06 | — | Pin/schema mismatch blocks before generation and requires reviewed amendment | acceptance gate | `uv run pytest && uv run ruff check .` | ✅ existing | ⬜ pending |
+| 02-04-04 | 04 | 4 | DATA-05, DATA-07 | — | Real corpus completion requires sealed generations and eligible/underpowered report | acceptance gate | `uv run pytest tests/test_generation.py -q` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
