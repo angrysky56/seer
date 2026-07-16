@@ -10,6 +10,7 @@ from seer.preparation import (
     PreparationError,
     ResolvedDataset,
     load_and_verify_staging,
+    prepare_data,
     stage_dataset_sources,
 )
 
@@ -125,3 +126,32 @@ def test_prepare_rejects_ambiguous_revision_and_split_drift(tmp_path: Path) -> N
     with pytest.raises(PreparationError, match="full commit"):
         stage_dataset_sources([item], tmp_path, allow_download=True,
                               resolver=backend, loader=backend, datasets_version="3.6.0")
+
+
+def test_prepare_data_publication_is_complete_and_transactional(tmp_path: Path) -> None:
+    item = spec("gsm8k")
+    backend = FakeBackend(resolved_for(item), {"train": [
+        {"id": "1", "question": "1+1?", "answer": "#### 2"},
+    ]})
+    prepare_data([item], tmp_path, allow_download=True, resolver=backend, loader=backend,
+                 datasets_version="3.6.0")
+    assert (tmp_path / "COMPLETE").is_file()
+    assert (tmp_path / "dataset-lock.json").is_file()
+    assert (tmp_path / "partition-manifest.json").is_file()
+    assert (tmp_path / "leakage-audit.json").is_file()
+    assert list((tmp_path / "examples").glob("*.jsonl"))
+    assert (tmp_path / "quarantine/conflicting-gold.jsonl").is_file()
+    assert (tmp_path / "corruptions/fixtures.jsonl").is_file()
+
+
+def test_prepare_data_interruption_never_marks_complete(tmp_path: Path) -> None:
+    item = spec("gsm8k")
+    backend = FakeBackend(resolved_for(item), {"train": [
+        {"id": "1", "question": "1+1?", "answer": "#### 2"},
+    ]})
+    def interrupt(_):
+        raise RuntimeError("interrupted")
+    with pytest.raises(RuntimeError, match="interrupted"):
+        prepare_data([item], tmp_path, allow_download=True, resolver=backend, loader=backend,
+                     datasets_version="3.6.0", before_complete=interrupt)
+    assert not (tmp_path / "COMPLETE").exists()

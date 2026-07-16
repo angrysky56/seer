@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 import shutil
 import tempfile
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -13,8 +14,22 @@ from typing import Any, Protocol
 
 from seer.adapters import BabiAdapter, Gsm8kAdapter, ProofWriterAdapter
 from seer.config import DatasetSpec
-from seer.evidence import TaskExample, decode_jsonl, encode_jsonl
-from seer.runtime import atomic_write_bytes, atomic_write_json, sha256_file
+from seer.corruptions import CorruptionRecord, encode_corruptions
+from seer.evidence import TaskExample, canonical_json_bytes, decode_jsonl, encode_jsonl
+from seer.partitions import (
+    PartitionError,
+    assign_partitions,
+    audit_and_deduplicate,
+    build_partition_manifest,
+    manifest_dict,
+)
+from seer.runtime import (
+    atomic_write_bytes,
+    atomic_write_json,
+    inventory_artifact,
+    sha256_file,
+    validate_artifacts,
+)
 
 
 class PreparationError(RuntimeError):
@@ -73,6 +88,10 @@ class DatasetResolver(Protocol):
 
 class DatasetLoader(Protocol):
     def load(self, resolved: ResolvedDataset, split: str) -> Iterable[Mapping[str, Any]]: ...
+
+
+def _canonical_pretty(value: Any) -> bytes:
+    return json.dumps(value, indent=2, sort_keys=True).encode() + b"\n"
 
 
 def _validate_resolution(spec: DatasetSpec, resolved: ResolvedDataset) -> None:
@@ -191,6 +210,87 @@ def stage_dataset_sources(
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
+
+
+def prepare_data(
+    specs: Iterable[DatasetSpec], root: str | Path, *, allow_download: bool = False,
+    resolver: DatasetResolver | None = None, loader: DatasetLoader | None = None,
+    datasets_version: str | None = None,
+    corruptions: Iterable[CorruptionRecord] = (),
+    before_complete: Any | None = None,
+) -> None:
+    """Stage sources, audit them, and publish a generation-eligible corpus atomically."""
+    destination = Path(root)
+    if (destination / "COMPLETE").exists():
+        raise PreparationError("prepared corpus is already complete and immutable")
+    if not (destination / "staging" / "dataset-lock.json").exists():
+        stage_dataset_sources(specs, destination, allow_download=allow_download,
+                              resolver=resolver, loader=loader,
+                              datasets_version=datasets_version)
+    staged = load_and_verify_staging(destination)
+    try:
+        assigned = assign_partitions(staged)
+        kept, quarantined, audit = audit_and_deduplicate(assigned)
+    except PartitionError as error:
+        raise PreparationError(str(error)) from error
+    temporary = Path(tempfile.mkdtemp(prefix=".publication-", dir=destination))
+    try:
+        shutil.copy2(destination / "staging" / "dataset-lock.json",
+                     temporary / "dataset-lock.json")
+        shards: dict[tuple[str, str], list[TaskExample]] = defaultdict(list)
+        for item in kept:
+            shards[(item.domain, item.partition)].append(item)
+        for (domain, partition), records in sorted(shards.items()):
+            atomic_write_bytes(temporary / "examples" / f"{domain}-{partition}.jsonl",
+                               encode_jsonl(tuple(records)))
+        atomic_write_bytes(temporary / "quarantine" / "conflicting-gold.jsonl",
+                           encode_jsonl(quarantined))
+        corruption_records = tuple(corruptions)
+        atomic_write_bytes(temporary / "corruptions" / "fixtures.jsonl",
+                           encode_corruptions(corruption_records))
+        artifact_hashes = {
+            path.relative_to(temporary).as_posix(): sha256_file(path)
+            for path in sorted(temporary.rglob("*")) if path.is_file()
+        }
+        manifest = build_partition_manifest(kept, artifact_hashes)
+        atomic_write_json(temporary / "partition-manifest.json", manifest_dict(manifest))
+        atomic_write_json(temporary / "leakage-audit.json", manifest_dict(audit))
+        artifacts = [inventory_artifact(temporary, path, schema_type=path.name)
+                     for path in sorted(temporary.rglob("*")) if path.is_file()]
+        atomic_write_json(temporary / "manifest.json", {
+            "schema_version": 1,
+            "status": "complete",
+            "counts": {"examples": len(kept), "quarantined": len(quarantined),
+                       "corruptions": len(corruption_records)},
+            "artifacts": [asdict(item) for item in artifacts],
+            "leakage_audit_sha256": sha256_file(temporary / "leakage-audit.json"),
+        })
+        validate_artifacts(temporary, artifacts)
+        if audit.content_overlaps or audit.group_overlaps:
+            raise PreparationError("protected overlap survived publication validation")
+        if before_complete is not None:
+            before_complete(temporary)
+        validate_artifacts(temporary, artifacts)
+        # Promote payloads individually only after the complete temporary tree validates.
+        for source in sorted(temporary.rglob("*")):
+            if source.is_file():
+                relative = source.relative_to(temporary)
+                atomic_write_bytes(destination / relative, source.read_bytes())
+        # Re-read final payload hashes before exposing generation eligibility.
+        final_manifest = json.loads((destination / "manifest.json").read_text())
+        from seer.runtime import ArtifactRecord
+        validate_artifacts(destination, [ArtifactRecord(**item)
+                                         for item in final_manifest["artifacts"]])
+        atomic_write_bytes(destination / "COMPLETE",
+                           canonical_json_bytes({"dataset_lock": sha256_file(
+                               destination / "dataset-lock.json"),
+                               "manifest": sha256_file(destination / "manifest.json")}) + b"\n")
+    except Exception:
+        # COMPLETE is the sole eligibility boundary; partial payloads remain ineligible.
+        (destination / "COMPLETE").unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
 
 
 class HuggingFaceDatasetBackend:

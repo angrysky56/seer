@@ -92,11 +92,11 @@ def main(
     if handler is not None:
         return handler(invocation, config)
     if invocation.command == "prepare-data":
-        from seer.preparation import PreparationError, stage_dataset_sources
+        from seer.preparation import PreparationError, prepare_data
 
         try:
-            stage_dataset_sources(config.datasets, config.output.root,
-                                  allow_download=invocation.allow_download)
+            prepare_data(config.datasets, config.output.root,
+                         allow_download=invocation.allow_download)
         except (OSError, PreparationError, ValueError) as error:
             print(f"seer: prepare-data failed: {error}", file=sys.stderr)
             return 2

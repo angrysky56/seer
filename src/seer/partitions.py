@@ -58,12 +58,15 @@ def assign_partition(example: TaskExample) -> Partition:
     value = partition_hash(example)
     if example.domain == "gsm8k" and split == "train":
         low, high = THRESHOLDS["gsm8k"]
-        return "signal_train" if value < low else "model_selection" if value < high else "calibration"
+        if value < low:
+            return "signal_train"
+        return "model_selection" if value < high else "calibration"
     if example.domain in {"proofwriter", "babi"} and split in {"validation", "valid"}:
         return "model_selection" if value < THRESHOLDS["development_50_50"][0] else "calibration"
     if split == "train":
         return "signal_train"
-    raise PartitionError(f"unsupported official split policy: {example.domain}/{example.source_split}")
+    policy = f"{example.domain}/{example.source_split}"
+    raise PartitionError(f"unsupported official split policy: {policy}")
 
 
 def assign_partitions(examples: Iterable[TaskExample]) -> tuple[TaskExample, ...]:

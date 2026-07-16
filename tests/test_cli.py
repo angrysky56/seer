@@ -67,3 +67,13 @@ def test_prepare_download_consent_is_scoped_to_prepare_command() -> None:
     assert invocation.allow_download is True
     with pytest.raises(SystemExit):
         build_parser().parse_args(["train", "--config", str(EXAMPLE), "--allow-download"])
+
+
+def test_prepare_data_handler_receives_explicit_consent() -> None:
+    received = []
+    def handler(invocation, config):
+        received.append((invocation.allow_download, config))
+        return 0
+    assert main(["prepare-data", "--config", str(EXAMPLE), "--allow-download"],
+                handlers={"prepare-data": handler}) == 0
+    assert received[0][0] is True
