@@ -10,10 +10,11 @@
 ## Current Position
 
 - **Phase:** 1 of 7 — Reproducible Experiment Runtime
-- **Status:** Ready to execute
+- **Status:** In progress
 - **Progress:** 0/47 milestone requirements complete
 - **Plans:** 4 plans across 3 waves
-- **Next command:** `/gsd-execute-phase 1`
+- **Current plan:** Wave 1 — `01-01-PLAN.md`
+- **Next command:** Continue `/gsd-execute-phase 1`
 
 ## Milestone Goal
 
@@ -57,13 +58,12 @@ test whether it can safely guide concept-space correction.
 
 ## Session Continuity
 
-Phase 1 research, Nyquist validation strategy, and four execution plans are
-complete and independently verified. No implementation plan has been executed.
-Begin with `/gsd-execute-phase 1`; do not start real dataset work assigned to
-Phase 2 or confirmatory model runs assigned to later phases.
+Phase 1 execution has started. Four execution plans are tracked across three
+waves. Do not start real dataset work assigned to Phase 2 or confirmatory model
+runs assigned to later phases.
 
 ## Last Activity
 
 - **Date:** 2026-07-15
-- **Action:** Planned Phase 1 — Reproducible Experiment Runtime
-- **Result:** 4 plans, 3 waves, verification passed after one validation-map correction
+- **Action:** Began Phase 1 execution — Reproducible Experiment Runtime
+- **Result:** Wave 1 dispatch pending
