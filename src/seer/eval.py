@@ -166,7 +166,7 @@ def full_eval_report(
     seeds: Sequence[int],
     n_bins: int = 10,
 ) -> dict[str, float]:
-    """Convenience bundle: AUROC (multi-seed via bootstrap resample per seed) + ECE + shuffle control.
+    """Bundle bootstrap multi-seed AUROC, ECE, and a shuffle control.
 
     Note this resamples with replacement per seed to get a spread even from a
     single fixed ``(labels, scores)`` set — when real per-seed *training* runs

@@ -1,8 +1,8 @@
 import torch
+from fakes import FakeBaseLM
 from torch import nn
 
 from seer.optim import build_optimizer, classify_named_parameters
-from fakes import FakeBaseLM
 
 
 def _param(*shape: int, requires_grad: bool = True) -> nn.Parameter:

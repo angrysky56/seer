@@ -1,6 +1,6 @@
 import torch
-
 from fakes import FakeBaseLM
+
 from seer.config import ModelConfig, TrainConfig
 from seer.data import Domain, SyntheticStateTrackingDataset
 from seer.model import SeerPathAModel

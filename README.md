@@ -61,6 +61,21 @@ Design + dev docs. See:
 - `docs/TRAINING.md` — how to train / modify: the hard-won recipes.
 - `docs/ROADMAP.md` — validated vs hypothesis, the experiment ladder.
 
+## Reproducible local smoke run
+
+SEER includes a CPU-only synthetic experiment that exercises the same config,
+checkpoint, manifest, and result schemas used by later real runs without loading
+Transformers or accessing model weights or datasets:
+
+```bash
+uv sync
+uv run seer smoke --config examples/synthetic.json --output-root /tmp/seer-runs --offline
+```
+
+The command is safe to repeat: validated completed evidence is an immutable no-op.
+See [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for offline verification, resume and
+replacement policies, explicit cache/download operations, and artifact meanings.
+
 ## Papers this builds on
 
 **State / prediction separation & efficiency**
