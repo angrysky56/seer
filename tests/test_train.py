@@ -4,7 +4,7 @@ from seer.config import ModelConfig, TrainConfig
 from seer.data import Domain, SyntheticStateTrackingDataset
 from seer.model import SeerPathAModel
 from seer.optim import build_optimizer
-from seer.train import joint_loss, train_loop
+from seer.train import TrainCursor, joint_loss, seed_everything, train_loop
 from fakes import FakeBaseLM
 
 
@@ -91,3 +91,74 @@ def test_train_loop_rejects_sparse_supervision() -> None:
         pass
     else:
         raise AssertionError("expected ValueError for dense_supervision=False")
+
+
+def _training_fixture(seed: int = 17):
+    seed_everything(seed)
+    base = FakeBaseLM(vocab_size=2, hidden_size=8, num_layers=1)
+    model = SeerPathAModel(
+        base,
+        ModelConfig(base_model_name="fake", concept_dim=4, freeze_base=False),
+    )
+    optimizer = build_optimizer(model, muon_lr=0.02, adamw_lr=1e-3)
+    dataset = SyntheticStateTrackingDataset(
+        domain=Domain("synthetic_parity"), num_examples=7, seq_len=8, seed=3
+    )
+    return model, optimizer, dataset
+
+
+def test_train_loop_checkpoint_resume_matches_clean_scientific_records() -> None:
+    config = TrainConfig(max_steps=7, batch_size=2, seeds=[17])
+    clean_model, clean_optimizer, dataset = _training_fixture()
+    clean = train_loop(clean_model, clean_optimizer, dataset, config, seed=17)
+
+    resumed_model, resumed_optimizer, dataset = _training_fixture()
+    checkpoints = []
+    first = train_loop(
+        resumed_model,
+        resumed_optimizer,
+        dataset,
+        config,
+        seed=17,
+        stop_after=4,
+        checkpoint_interval=2,
+        checkpoint_callback=checkpoints.append,
+    )
+    checkpoint = checkpoints[-1]
+    assert checkpoint.cursor.global_step == 4
+    assert checkpoint.cursor.next_batch == 0
+    assert checkpoint.cursor.next_epoch == 1
+    assert checkpoint.data_order_state["epoch_permutation"] == [2, 4, 3, 5, 6, 1, 0]
+
+    continued = train_loop(
+        resumed_model,
+        resumed_optimizer,
+        dataset,
+        config,
+        seed=17,
+        cursor=checkpoint.cursor,
+        data_order_state=checkpoint.data_order_state,
+    )
+    assert [record.to_dict() for record in clean] == [
+        record.to_dict() for record in first + continued
+    ]
+    assert [record.step for record in first + continued] == list(range(7))
+
+
+def test_train_loop_honors_explicit_mid_epoch_cursor_and_callback_cadence() -> None:
+    config = TrainConfig(max_steps=5, batch_size=2, seeds=[5])
+    model, optimizer, dataset = _training_fixture(seed=5)
+    checkpoints = []
+    records = train_loop(
+        model,
+        optimizer,
+        dataset,
+        config,
+        seed=5,
+        cursor=TrainCursor(global_step=1, next_epoch=0, next_batch=1),
+        checkpoint_interval=2,
+        checkpoint_callback=checkpoints.append,
+    )
+    assert [record.step for record in records] == [1, 2, 3, 4]
+    assert [checkpoint.cursor.global_step for checkpoint in checkpoints] == [2, 4]
+    assert all("python" in checkpoint.rng_state for checkpoint in checkpoints)

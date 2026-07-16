@@ -16,12 +16,15 @@ downloaded base model or a real domain dataset — that is experiment 1 itself
 
 from __future__ import annotations
 
+import copy
+import random
 from dataclasses import dataclass
+from typing import Any
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
-from torch.utils.data import DataLoader
 
 from seer.config import TrainConfig
 from seer.data import DomainDataset, StateTrackingBatch, collate_state_tracking_examples
@@ -92,6 +95,48 @@ class TrainStepResult:
     step: int
     loss: LossBreakdown
 
+    def to_dict(self) -> dict[str, int | float]:
+        """Return the stable scientific fields, excluding tensors and timings."""
+        return {
+            "step": self.step,
+            "total_loss": float(self.loss.total.detach().cpu()),
+            "task_loss": float(self.loss.task_loss.cpu()),
+            "certainty_loss": float(self.loss.certainty_loss.cpu()),
+            "task_accuracy": float(self.loss.task_accuracy.cpu()),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TrainCursor:
+    """The next logical position to execute in a deterministic training stream."""
+
+    global_step: int = 0
+    next_epoch: int = 0
+    next_batch: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class TrainCheckpoint:
+    """Complete continuation payload delivered at configured step boundaries."""
+
+    cursor: TrainCursor
+    model_state: dict[str, Any]
+    optimizer_state: dict[str, Any]
+    rng_state: dict[str, Any]
+    data_order_state: dict[str, Any]
+
+
+def seed_everything(seed: int) -> None:
+    """Seed every RNG used by the supported deterministic CPU path."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def _permutation(dataset_size: int, seed: int, epoch: int) -> list[int]:
+    generator = torch.Generator().manual_seed(seed + epoch)
+    return torch.randperm(dataset_size, generator=generator).tolist()
+
 
 def train_loop(
     model: nn.Module,
@@ -99,6 +144,13 @@ def train_loop(
     dataset: DomainDataset,
     config: TrainConfig,
     device: torch.device | str = "cpu",
+    *,
+    seed: int | None = None,
+    cursor: TrainCursor | None = None,
+    data_order_state: dict[str, Any] | None = None,
+    checkpoint_interval: int | None = None,
+    checkpoint_callback: Any | None = None,
+    stop_after: int | None = None,
 ) -> list[TrainStepResult]:
     """Run the joint-objective training loop for ``config.max_steps`` steps.
 
@@ -126,24 +178,41 @@ def train_loop(
             "single terminal target does not train state-tracking."
         )
 
+    training_seed = config.seeds[0] if seed is None else seed
+    position = cursor or TrainCursor()
+    if position.global_step < 0 or position.next_epoch < 0 or position.next_batch < 0:
+        raise ValueError("training cursor positions must be non-negative")
+    if position.global_step > config.max_steps:
+        raise ValueError("training cursor is beyond max_steps")
+    if cursor is None:
+        seed_everything(training_seed)
+
     model.to(device)
     model.train()
 
-    loader = DataLoader(
-        dataset,
-        batch_size=config.batch_size,
-        shuffle=True,
-        collate_fn=collate_state_tracking_examples,
-    )
-
     use_bf16 = config.precision == "bf16"
     results: list[TrainStepResult] = []
-    step = 0
-    while step < config.max_steps:
-        for batch in loader:
-            if step >= config.max_steps:
+    step = position.global_step
+    epoch = position.next_epoch
+    batch_index = position.next_batch
+    executed = 0
+    batches_per_epoch = (len(dataset) + config.batch_size - 1) // config.batch_size
+    if batches_per_epoch == 0:
+        raise ValueError("training dataset must not be empty")
+    while step < config.max_steps and (stop_after is None or executed < stop_after):
+        permutation = _permutation(len(dataset), training_seed, epoch)
+        if data_order_state and data_order_state.get("epoch") == epoch:
+            persisted = data_order_state.get("epoch_permutation")
+            if persisted != permutation:
+                raise ValueError("persisted data order does not match deterministic permutation")
+        while batch_index < batches_per_epoch:
+            if step >= config.max_steps or (stop_after is not None and executed >= stop_after):
                 break
-            batch: StateTrackingBatch
+            start = batch_index * config.batch_size
+            indices = permutation[start : start + config.batch_size]
+            batch: StateTrackingBatch = collate_state_tracking_examples(
+                [dataset[index] for index in indices]
+            )
             input_ids = batch.input_ids.to(device)
             step_targets = batch.step_targets.to(device)
             step_mask = batch.step_mask.to(device)
@@ -167,5 +236,35 @@ def train_loop(
 
             results.append(TrainStepResult(step=step, loss=loss))
             step += 1
+            executed += 1
+            batch_index += 1
+            next_epoch, next_batch = epoch, batch_index
+            if next_batch >= batches_per_epoch:
+                next_epoch, next_batch = epoch + 1, 0
+            if (
+                checkpoint_callback is not None
+                and checkpoint_interval is not None
+                and step % checkpoint_interval == 0
+            ):
+                from seer.runtime import capture_rng_state
+
+                checkpoint_callback(
+                    TrainCheckpoint(
+                        cursor=TrainCursor(step, next_epoch, next_batch),
+                        model_state=copy.deepcopy(model.state_dict()),
+                        optimizer_state=copy.deepcopy(optimizer.state_dict()),
+                        rng_state=capture_rng_state(),
+                        data_order_state={
+                            "seed": training_seed,
+                            "epoch": epoch,
+                            "epoch_permutation": permutation,
+                            "next_epoch": next_epoch,
+                            "next_batch": next_batch,
+                        },
+                    )
+                )
+        if batch_index >= batches_per_epoch:
+            epoch += 1
+            batch_index = 0
 
     return results
