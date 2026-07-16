@@ -140,6 +140,10 @@ class GenerationRunner:
             list(prompt.messages), tokenize=True, add_generation_prompt=True,
             enable_thinking=regime.thinking_enabled, return_tensors="pt",
         )
+        if isinstance(ids, dict):
+            if "input_ids" not in ids:
+                raise GenerationError("chat template did not return input_ids")
+            ids = ids["input_ids"]
         nested_ids = (hasattr(ids, "ndim") and ids.ndim > 1) or (
             len(ids) and isinstance(ids[0], (list, tuple)))
         prompt_ids = [int(item) for item in (ids[0] if nested_ids else ids)]

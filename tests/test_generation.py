@@ -44,6 +44,12 @@ class FakeGenerator:
         return [list(input_ids) + list(self.suffix)]
 
 
+class MappingTokenizer(FakeTokenizer):
+    def apply_chat_template(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+        return {"input_ids": [10, 11, 12]}
+
+
 def protected(domain="proofwriter"):
     return ProtectedExample("a" * 64, domain, "confirmatory_test", "Question?",
                             {"system": "Solve exactly."}, {})
@@ -87,6 +93,12 @@ def test_prompt_budget_exhaustion_is_linked_and_does_not_generate():
     assert record is None and failure is not None
     assert failure.code == "prompt_over_budget" and failure.generation_id
     assert model.calls == []
+
+
+def test_chat_template_accepts_transformers_batch_encoding_shape():
+    record, failure = GenerationRunner(MappingTokenizer(), FakeGenerator()).run(
+        protected(), GenerationRegime.primary("proofwriter"))
+    assert failure is None and record is not None and record.prompt_token_count == 3
 
 
 def test_regime_rejects_unbounded_or_mixed_contracts():
