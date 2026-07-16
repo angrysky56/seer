@@ -19,13 +19,22 @@ def run(*args: str, cwd: Path) -> None:
 
 def validate_prepared(root: Path, repo: Path) -> None:
     code = (
-        "import json; from pathlib import Path; "
+        "import json, sys; from pathlib import Path; "
         "from seer.runtime import ArtifactRecord,validate_artifacts; "
-        f"r=Path({str(root)!r}); assert (r/'COMPLETE').is_file(); "
+        f"r=Path({str(root)!r}); "
+        "if not (r/'COMPLETE').is_file(): sys.exit("
+        "f'AssertionError: COMPLETE file is missing at {r}. Did preparation finish?'); "
+        "if not (r/'manifest.json').is_file(): sys.exit("
+        "f'AssertionError: manifest.json is missing at {r}'); "
         "m=json.loads((r/'manifest.json').read_text()); "
         "validate_artifacts(r,[ArtifactRecord(**x) for x in m['artifacts']]); "
+        "if not (r/'leakage-audit.json').is_file(): sys.exit("
+        "f'AssertionError: leakage-audit.json is missing at {r}'); "
         "a=json.loads((r/'leakage-audit.json').read_text()); "
-        "assert not a['content_overlaps'] and not a['group_overlaps']; print('prepared corpus OK')"
+        "co, go = a.get('content_overlaps', []), a.get('group_overlaps', []); "
+        "if co or go: sys.exit(f'AssertionError: Leakage audit failed with overlaps! "
+        "content_overlaps={co} group_overlaps={go}'); "
+        "print('prepared corpus OK')"
     )
     run("uv", "run", "--offline", "python", "-c", code, cwd=repo)
 
