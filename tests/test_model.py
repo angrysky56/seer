@@ -1,5 +1,7 @@
 import torch
+import pytest
 
+from seer.cache import ResolvedSnapshot
 from seer.config import ModelConfig
 from seer.model import SeerPathAModel
 from fakes import FakeBaseLM
@@ -76,3 +78,57 @@ def test_commit_layer_zero_uses_embedding_output() -> None:
             model.concept_proj(base.embed_tokens(input_ids)), p=2, dim=-1
         )
     assert torch.allclose(out["concept"], expected_concept, atol=1e-5)
+
+
+def test_from_pretrained_loads_verified_snapshot_offline(tmp_path) -> None:
+    base = FakeBaseLM(vocab_size=5, hidden_size=16, num_layers=2)
+    snapshot = ResolvedSnapshot(
+        repository_id="Qwen/Qwen3-0.6B",
+        revision="c1899de289a04d12100db370d81485cdf75e47ca",
+        snapshot_path=tmp_path / "snapshot",
+        cache_dir=tmp_path,
+        metadata_hashes={"config.json": "abc"},
+    )
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def loader(path, **kwargs):
+        calls.append((path, kwargs))
+        return base
+
+    config = ModelConfig(
+        base_model_name=snapshot.repository_id,
+        revision=snapshot.revision,
+        cache_dir=tmp_path,
+        local_files_only=True,
+        concept_dim=8,
+    )
+    model = SeerPathAModel.from_pretrained(config, snapshot=snapshot, loader=loader)
+
+    assert model.base_model is base
+    assert calls == [(snapshot.snapshot_path, {"local_files_only": True})]
+
+
+def test_from_pretrained_rejects_unverified_identity_before_loader(tmp_path) -> None:
+    snapshot = ResolvedSnapshot(
+        repository_id="other/model",
+        revision="wrong",
+        snapshot_path=tmp_path / "snapshot",
+        cache_dir=tmp_path,
+        metadata_hashes={},
+    )
+    calls = 0
+
+    def loader(path, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("loader must not run")
+
+    config = ModelConfig(
+        base_model_name="Qwen/Qwen3-0.6B",
+        revision="c1899de289a04d12100db370d81485cdf75e47ca",
+        cache_dir=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        SeerPathAModel.from_pretrained(config, snapshot=snapshot, loader=loader)
+    assert calls == 0
