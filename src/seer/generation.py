@@ -211,7 +211,18 @@ class GenerationRunner:
         thinking, answer = _split_thinking(raw_tokens, regime.thinking_enabled)
         if not regime.thinking_enabled:
             answer = raw
+        if answer is not None:
+            answer = re.sub(r"<\|[^|]+\|>", "", answer).strip()
+        failure = None
         failure_id = None
+        if exhausted:
+            failure_id = _failure_id(
+                "generation", "token_budget_exhausted", example.example_id, gid)
+            failure = FailureRecord(
+                failure_id, "generation", "token_budget_exhausted",
+                "generation reached the immutable token budget", False,
+                example.example_id, gid, {"regime": regime.name,
+                                          "max_new_tokens": regime.max_new_tokens})
         finish = (
             "length" if exhausted else
             "eos" if generated and generated[-1] in eos_ids else "stop"
@@ -224,7 +235,7 @@ class GenerationRunner:
             regime.max_new_tokens, eos_ids, self.tokenizer.pad_token_id, eos_ids, self.dtype,
             self.device, raw, tuple(generated), None, len(generated), finish, exhausted,
             thinking, answer, failure_id,
-        ), None
+        ), failure
 
 
 def _failure_id(stage: str, code: str, example_id: str, generation_id_value: str) -> str:

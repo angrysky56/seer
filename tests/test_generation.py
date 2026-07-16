@@ -96,6 +96,16 @@ def test_prompt_budget_exhaustion_is_linked_and_does_not_generate():
     assert model.calls == []
 
 
+def test_token_budget_exhaustion_retains_generation_and_linked_failure():
+    record, failure = GenerationRunner(
+        FakeTokenizer(), FakeGenerator(tuple(range(96))), max_context_tokens=200).run(
+            protected(), GenerationRegime.primary("proofwriter"))
+    assert record is not None and failure is not None
+    assert record.truncated and record.finish_reason == "length"
+    assert failure.code == "token_budget_exhausted"
+    assert record.failure_id == failure.record_id
+
+
 def test_chat_template_accepts_transformers_batch_encoding_shape():
     record, failure = GenerationRunner(MappingTokenizer(), FakeGenerator()).run(
         protected(), GenerationRegime.primary("proofwriter"))
