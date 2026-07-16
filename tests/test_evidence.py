@@ -13,6 +13,7 @@ from seer.evidence import (
     ScoredResult,
     TaskExample,
     canonical_json_bytes,
+    decode_jsonl,
     decode_record,
     encode_jsonl,
     example_id,
@@ -73,6 +74,13 @@ def test_all_records_round_trip_with_canonical_byte_stability() -> None:
         wire = canonical_json_bytes(record)
         assert canonical_json_bytes(decode_record(wire)) == wire
     assert encode_jsonl(records).endswith(b"\n")
+
+
+def test_jsonl_decoder_preserves_unicode_line_separator_inside_source_text() -> None:
+    item = example()
+    item = type(item)(**{**{field.name: getattr(item, field.name) for field in fields(item)},
+                         "prompt_text": "first\u2028second"})
+    assert decode_jsonl(encode_jsonl((item,))) == (item,)
 
 
 @pytest.mark.parametrize(

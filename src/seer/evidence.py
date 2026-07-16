@@ -243,4 +243,6 @@ def encode_jsonl(records: list[EvidenceRecord] | tuple[EvidenceRecord, ...]) -> 
 
 def decode_jsonl(data: bytes | str) -> tuple[EvidenceRecord, ...]:
     lines = data.decode() if isinstance(data, bytes) else data
-    return tuple(decode_record(line) for line in lines.splitlines() if line.strip())
+    # JSONL is delimited by LF bytes. Unicode line separators are valid inside JSON strings,
+    # while ``str.splitlines`` would incorrectly split those scientific source values.
+    return tuple(decode_record(line) for line in lines.split("\n") if line.strip())
