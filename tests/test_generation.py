@@ -4,8 +4,17 @@ from dataclasses import replace
 
 import pytest
 
-from seer.generation import GenerationError, GenerationRegime, GenerationRunner, PromptRegistry
+from seer.evidence import ScoredResult, TaskExample, encode_jsonl
+from seer.generation import (
+    GenerationError,
+    GenerationRegime,
+    GenerationRunner,
+    PromptRegistry,
+    cache_outputs,
+)
 from seer.partitions import ProtectedExample
+from seer.runtime import atomic_write_bytes, atomic_write_json, sha256_file
+from seer.sufficiency import build_sufficiency_report
 
 
 class FakeTokenizer:
@@ -83,3 +92,98 @@ def test_prompt_budget_exhaustion_is_linked_and_does_not_generate():
 def test_regime_rejects_unbounded_or_mixed_contracts():
     with pytest.raises(GenerationError):
         replace(GenerationRegime.thinking(), max_new_tokens=2048)
+
+
+@pytest.mark.parametrize("correct,incorrect,status", [
+    (99, 100, "underpowered"), (100, 99, "underpowered"), (100, 100, "eligible")])
+def test_natural_sufficiency_boundaries(correct, incorrect, status):
+    runner = GenerationRunner(FakeTokenizer(), FakeGenerator())
+    base, _ = runner.run(protected(), GenerationRegime.primary("proofwriter"))
+    assert base is not None
+    generations, scores, metadata = [], [], {}
+    for index, is_correct in enumerate([True] * correct + [False] * incorrect):
+        example_id = f"{index:064x}"
+        generation_id = f"{index + 1000:064x}"
+        generations.append(replace(base, example_id=example_id, generation_id=generation_id))
+        scores.append(ScoredResult(generation_id, "FINAL: true", "true", "true",
+                                   is_correct, "scored", "proofwriter", 1,
+                                   ("true",), None))
+        metadata[example_id] = ("proofwriter", "confirmatory_test")
+    report = build_sufficiency_report(generations, scores, (), metadata)
+    assert report.status == status
+
+
+def test_sufficiency_excludes_invalid_and_ambiguous_rows():
+    runner = GenerationRunner(FakeTokenizer(), FakeGenerator())
+    base, _ = runner.run(protected(), GenerationRegime.primary("proofwriter"))
+    assert base is not None
+    generations = [replace(base, example_id=f"{index:064x}", generation_id=f"{index:064x}")
+                   for index in range(3)]
+    scores = [
+        ScoredResult(f"{0:064x}", "", None, "true", None, "invalid", "proofwriter", 1, (),
+                     "source_gold_invalid"),
+        ScoredResult(f"{1:064x}", "", None, "true", None, "ambiguous", "proofwriter", 1, (),
+                     "multiple_conflicting_answers"),
+    ]
+    metadata = {f"{index:064x}": ("proofwriter", "confirmatory_test") for index in range(3)}
+    group = build_sufficiency_report(generations, scores, (), metadata).groups[0]
+    assert (group.correct, group.incorrect, group.invalid_source, group.ambiguous) == (0, 0, 1, 1)
+
+
+def prepared_root(tmp_path, count=3):
+    root = tmp_path / "prepared"
+    examples = []
+    for index in range(count):
+        eid = f"{index + 1:064x}"
+        examples.append(TaskExample(
+            eid, "proofwriter", "tasksource/proofwriter", "7" * 40, "default", "test",
+            str(index), str(index), "confirmatory_test", "proofwriter-v1",
+            {"system": "Solve exactly."}, "Question?", "true", "true", "categorical", {},
+            "b" * 64, "c" * 64, "unknown/not-declared"))
+    path = root / "examples" / "proofwriter-confirmatory_test.jsonl"
+    atomic_write_bytes(path, encode_jsonl(tuple(examples)))
+    for name in ("dataset-lock.json", "partition-manifest.json", "leakage-audit.json"):
+        atomic_write_json(root / name, {"schema_version": 1})
+    artifacts = []
+    for item in sorted(root.rglob("*")):
+        if item.is_file():
+            artifacts.append({"path": item.relative_to(root).as_posix(),
+                              "bytes": item.stat().st_size, "sha256": sha256_file(item),
+                              "media_type": "application/octet-stream", "schema_type": None})
+    atomic_write_json(root / "manifest.json", {"artifacts": artifacts})
+    atomic_write_bytes(root / "COMPLETE", b"complete\n")
+    return root
+
+
+def test_resume_is_duplicate_free_and_matches_clean_generation(tmp_path):
+    prepared = prepared_root(tmp_path)
+    with pytest.raises(GenerationError, match="interruption"):
+        cache_outputs(prepared, tmp_path / "resumed",
+                      GenerationRunner(FakeTokenizer(), FakeGenerator()), interrupt_after=1)
+    cache_outputs(prepared, tmp_path / "resumed",
+                  GenerationRunner(FakeTokenizer(), FakeGenerator()), resume=True)
+    cache_outputs(prepared, tmp_path / "clean",
+                  GenerationRunner(FakeTokenizer(), FakeGenerator()))
+    resumed = (tmp_path / "resumed/artifacts/generations.jsonl").read_bytes()
+    clean = (tmp_path / "clean/artifacts/generations.jsonl").read_bytes()
+    assert resumed == clean
+    assert len(resumed.splitlines()) == 3
+
+
+def test_completed_generation_rejects_sealed_tamper(tmp_path):
+    prepared = prepared_root(tmp_path)
+    output = tmp_path / "output"
+    cache_outputs(prepared, output, GenerationRunner(FakeTokenizer(), FakeGenerator()))
+    with (output / "artifacts/generations.jsonl").open("ab") as stream:
+        stream.write(b"{}\n")
+    with pytest.raises(GenerationError, match="sealed artifact mutation"):
+        cache_outputs(prepared, output, GenerationRunner(FakeTokenizer(), FakeGenerator()))
+
+
+def test_prepared_lock_tamper_fails_before_model_generation(tmp_path):
+    prepared = prepared_root(tmp_path)
+    model = FakeGenerator()
+    atomic_write_json(prepared / "dataset-lock.json", {"tampered": True})
+    with pytest.raises(GenerationError, match="prepared artifact mutation"):
+        cache_outputs(prepared, tmp_path / "output", GenerationRunner(FakeTokenizer(), model))
+    assert model.calls == []

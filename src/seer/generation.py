@@ -3,20 +3,28 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from seer.cache import QWEN3_REPOSITORY, QWEN3_REVISION, resolve_cached_snapshot
 from seer.evidence import (
     FailureRecord,
     GenerationRecord,
+    TaskExample,
     canonical_json_bytes,
+    decode_jsonl,
+    encode_jsonl,
     generation_id,
     record_id,
 )
-from seer.partitions import ProtectedExample
+from seer.normalization import score_generation
+from seer.partitions import GoldScorer, ProtectedExample, protected_generation_view
+from seer.runtime import atomic_write_bytes, atomic_write_json, sha256_file
+from seer.sufficiency import build_sufficiency_report
 
 PROMPT_VERSION = 1
 
@@ -203,3 +211,114 @@ def load_cached_qwen(*, cache_dir: str | None = None) -> tuple[Any, Any]:
     tokenizer = AutoTokenizer.from_pretrained(snapshot.snapshot_path, local_files_only=True)
     model = AutoModelForCausalLM.from_pretrained(snapshot.snapshot_path, local_files_only=True)
     return tokenizer, model
+
+
+def _prepared_examples(root: Path) -> tuple[TaskExample, ...]:
+    if not (root / "COMPLETE").is_file():
+        raise GenerationError("prepared corpus is incomplete")
+    manifest = json.loads((root / "manifest.json").read_text())
+    for artifact in manifest["artifacts"]:
+        path = root / artifact["path"]
+        if not path.is_file() or sha256_file(path) != artifact["sha256"]:
+            raise GenerationError(f"prepared artifact mutation: {artifact['path']}")
+    records = []
+    for path in sorted((root / "examples").glob("*.jsonl")):
+        decoded = decode_jsonl(path.read_bytes())
+        records.extend(item for item in decoded if isinstance(item, TaskExample))
+    return tuple(records)
+
+
+def _identity(prepared_root: Path, runner: GenerationRunner,
+              regimes: tuple[GenerationRegime, ...]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "prepared_complete_sha256": sha256_file(prepared_root / "COMPLETE"),
+        "dataset_lock_sha256": sha256_file(prepared_root / "dataset-lock.json"),
+        "partition_manifest_sha256": sha256_file(prepared_root / "partition-manifest.json"),
+        "leakage_audit_sha256": sha256_file(prepared_root / "leakage-audit.json"),
+        "model_id": runner.model_id, "model_revision": runner.model_revision,
+        "tokenizer_revision": runner.tokenizer_revision,
+        "chat_template_sha256": _hash(runner.tokenizer.chat_template),
+        "regimes": [item.parameters() for item in regimes],
+    }
+
+
+def cache_outputs(prepared_root: str | Path, output_root: str | Path,
+                  runner: GenerationRunner, *, regimes: tuple[GenerationRegime, ...] | None = None,
+                  resume: bool = False, replace_existing: bool = False,
+                  interrupt_after: int | None = None) -> Path:
+    """Generate label-blind shards, seal them, then open gold solely for scoring."""
+    prepared, output = Path(prepared_root), Path(output_root)
+    examples = _prepared_examples(prepared)
+    regimes = regimes or tuple(GenerationRegime.primary(domain)
+                               for domain in ("gsm8k", "proofwriter", "babi"))
+    identity = _identity(prepared, runner, regimes)
+    if output.exists() and replace_existing:
+        import shutil
+        shutil.rmtree(output)
+    output.mkdir(parents=True, exist_ok=True)
+    artifacts = output / "artifacts"
+    artifacts.mkdir(exist_ok=True)
+    identity_path = artifacts / "generation-identity.json"
+    if identity_path.exists():
+        if json.loads(identity_path.read_text()) != identity:
+            raise GenerationError("generation identity drift")
+        if not resume and not (output / "COMPLETE").exists():
+            raise GenerationError("incomplete generation exists; use resume")
+    else:
+        atomic_write_json(identity_path, identity)
+    if (output / "COMPLETE").exists():
+        index = json.loads((artifacts / "generation-index.json").read_text())
+        for relative, expected in index["sealed_hashes"].items():
+            if sha256_file(output / relative) != expected:
+                raise GenerationError(f"sealed artifact mutation: {relative}")
+        return output
+    generations_path, failures_path = artifacts / "generations.jsonl", artifacts / "failures.jsonl"
+    existing_gens = (
+        list(decode_jsonl(generations_path.read_bytes())) if generations_path.exists() else [])
+    existing_failures = (
+        list(decode_jsonl(failures_path.read_bytes())) if failures_path.exists() else [])
+    done = {item.example_id for item in existing_gens if isinstance(item, GenerationRecord)} | {
+        item.example_id for item in existing_failures if isinstance(item, FailureRecord)}
+    generated = [item for item in existing_gens if isinstance(item, GenerationRecord)]
+    failures = [item for item in existing_failures if isinstance(item, FailureRecord)]
+    count = 0
+    regime_by_domain = {"gsm8k": regimes[0], "proofwriter": regimes[1], "babi": regimes[2]}
+    for item in protected_generation_view(examples):
+        if item.example_id in done:
+            continue
+        record, failure = runner.run(item, regime_by_domain[item.domain])
+        if record is not None:
+            generated.append(record)
+        if failure is not None:
+            failures.append(failure)
+        atomic_write_bytes(generations_path, encode_jsonl(tuple(generated)))
+        atomic_write_bytes(failures_path, encode_jsonl(tuple(failures)))
+        count += 1
+        if interrupt_after is not None and count >= interrupt_after:
+            raise GenerationError("injected generation interruption")
+    sealed = {path.relative_to(output).as_posix(): sha256_file(path)
+              for path in (generations_path, failures_path, identity_path)}
+    atomic_write_json(artifacts / "generation-index.json",
+                      {"schema_version": 1, "generation_ids": sorted(
+                          item.generation_id for item in generated), "sealed_hashes": sealed})
+    # Only after the seal exists may the narrow capability reveal gold to the scorer.
+    scorer = GoldScorer(examples)
+    by_id = {item.example_id: item for item in examples}
+    scores = [score_generation(item, scorer.gold_for(item.example_id),
+                               domain=by_id[item.example_id].domain) for item in generated]
+    scores_path = artifacts / "scores.jsonl"
+    atomic_write_bytes(scores_path, encode_jsonl(tuple(scores)))
+    report = build_sufficiency_report(generated, scores, failures,
+                                      {item.example_id: (item.domain, item.partition)
+                                       for item in examples})
+    atomic_write_json(artifacts / "sufficiency-report.json", report.to_dict())
+    # Revalidate the immutable generation boundary before exposing completion.
+    for relative, expected in sealed.items():
+        if sha256_file(output / relative) != expected:
+            raise GenerationError(f"sealed artifact mutation: {relative}")
+    atomic_write_bytes(output / "COMPLETE", canonical_json_bytes({
+        "generation_index": sha256_file(artifacts / "generation-index.json"),
+        "scores": sha256_file(scores_path),
+        "sufficiency": sha256_file(artifacts / "sufficiency-report.json")}) + b"\n")
+    return output

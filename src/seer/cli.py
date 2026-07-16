@@ -101,6 +101,33 @@ def main(
             print(f"seer: prepare-data failed: {error}", file=sys.stderr)
             return 2
         return 0
+    if invocation.command == "cache-outputs":
+        from seer.generation import (
+            GenerationError,
+            GenerationRunner,
+            cache_outputs,
+            load_cached_qwen,
+        )
+
+        try:
+            tokenizer, model = load_cached_qwen(
+                cache_dir=str(config.model.cache_dir) if config.model.cache_dir else None)
+            runner = GenerationRunner(
+                tokenizer, model, model_id=config.model.base_model_name,
+                model_revision=config.model.revision or "",
+                tokenizer_revision=config.model.revision or "",
+            )
+            cache_outputs(
+                config.output.root,
+                config.output.root / "generation-runs" / config.output.run_name,
+                runner,
+                resume=invocation.resume,
+                replace_existing=invocation.replace,
+            )
+        except (GenerationError, OSError, RuntimeError, ValueError) as error:
+            print(f"seer: cache-outputs failed: {error}", file=sys.stderr)
+            return 2
+        return 0
     if invocation.command == "smoke":
         from seer.smoke import run_smoke
 
